@@ -2568,18 +2568,37 @@ create_accounts() {
 SUDOERS
 	chmod 440 /etc/sudoers.d/10-wheel
 
-	# Créer les répertoires XDG standards (Images, Documents, Téléchargements…)
-	# GNOME/KDE le font via PAM au premier login ; les WM minimalistes ne le font pas.
-	if command -v xdg-user-dirs-update >/dev/null 2>&1; then
-		run_logged runuser -u "$USERNAME" -- xdg-user-dirs-update
-	else
-		# Fallback : créer les dossiers classiques manuellement
-		local user_home="/home/$USERNAME"
-		local dir
-		for dir in Desktop Documents Downloads Music Pictures Videos Templates Public; do
-			install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/$dir"
-		done
-	fi
+	# Créer les répertoires XDG standards + écrire user-dirs.dirs explicitement.
+	# GNOME/KDE le font via PAM ; les WM minimalistes (i3/Hyprland/Sway) ne le font pas.
+	# xdg-user-dirs-update dans un chroot tourne sans locale → user-dirs.dirs pas écrit →
+	# Nautilus affiche "Aucun répertoire personnel". On écrit donc tout manuellement.
+	local user_home="/home/$USERNAME"
+	local dir
+	for dir in Desktop Documents Downloads Music Pictures Videos Templates Public; do
+		install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/$dir"
+	done
+
+	install -d -m 0700 -o "$USERNAME" -g "$USERNAME" "$user_home/.config"
+	cat > "$user_home/.config/user-dirs.dirs" <<'USERDIRS'
+# This file is written by the installer.
+# Format: XDG_xxx_DIR="$HOME/relative-path"
+XDG_DESKTOP_DIR="$HOME/Desktop"
+XDG_DOWNLOAD_DIR="$HOME/Downloads"
+XDG_TEMPLATES_DIR="$HOME/Templates"
+XDG_PUBLICSHARE_DIR="$HOME/Public"
+XDG_DOCUMENTS_DIR="$HOME/Documents"
+XDG_MUSIC_DIR="$HOME/Music"
+XDG_PICTURES_DIR="$HOME/Pictures"
+XDG_VIDEOS_DIR="$HOME/Videos"
+USERDIRS
+	chown "$USERNAME:$USERNAME" "$user_home/.config/user-dirs.dirs"
+
+	# Indique a xdg-user-dirs de ne pas renommer les dossiers selon la locale du premier login
+	printf '%s\n' "$LOCALE" > "$user_home/.config/user-dirs.locale"
+
+	# Correction defensive des permissions : tout le home doit appartenir a l'utilisateur.
+	# Certaines fonctions (install -d) peuvent laisser des intermediaires en root:root.
+	chown -R "$USERNAME:$USERNAME" "$user_home"
 }
 
 write_fastfetch_config() {
