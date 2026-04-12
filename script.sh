@@ -2134,14 +2134,45 @@ show_summary() {
 
 	[[ "$confirm" == "no" ]] && return 0
 
-	if prompt_yes_no "Confirmer et lancer l'installation ?" "n"; then
-		return 0
+	if ! prompt_yes_no "Confirmer et lancer l'installation ?" "n"; then
+		local status=$?
+		if is_ui_cancel_status "$status"; then
+			return "$status"
+		fi
+		return "$UI_CANCEL_STATUS"
 	fi
-	local status=$?
-	if is_ui_cancel_status "$status"; then
-		return "$status"
+
+	# Confirmation destructive explicite : affiche le disque et les partitions cibles
+	local danger_msg
+	danger_msg="$(printf \
+'⚠  AVERTISSEMENT — OPÉRATION IRRÉVERSIBLE\n\n'\
+'Les données suivantes vont être DÉTRUITES :\n\n'\
+'  Disque    : %s\n'\
+'  EFI       : %s\n'\
+'  Root      : %s\n'\
+'%s'\
+'%s'\
+'\nIl n'"'"'est pas possible d'"'"'annuler après cette étape.\n\n'\
+'Confirmer la destruction des données ?' \
+		"${TARGET_DISK:-inconnu}" \
+		"${EFI_PART:-—}" \
+		"${ROOT_PART:-—}" \
+		"$([ -n "$HOME_PART" ] && printf '  Home      : %s\n' "$HOME_PART")" \
+		"$([ -n "$SWAP_PART" ] && printf '  Swap      : %s\n' "$SWAP_PART")")"
+
+	if use_tui; then
+		if ! whiptail --backtitle "$SCRIPT_NAME" --title "⚠ CONFIRMATION DESTRUCTIVE" \
+			--defaultno --yesno "$danger_msg" 18 70 </dev/tty >/dev/tty 2>/dev/tty; then
+			return "$UI_CANCEL_STATUS"
+		fi
+	else
+		warn "$danger_msg"
+		if ! prompt_yes_no "Confirmer la destruction ?" "n"; then
+			return "$UI_CANCEL_STATUS"
+		fi
 	fi
-	return "$UI_CANCEL_STATUS"
+
+	return 0
 }
 
 save_profile_interactive() {
