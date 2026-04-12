@@ -91,8 +91,8 @@ AUTO_CREATE_SWAP="yes"
 AUTO_SWAP_SIZE_GIB="4"
 AUTO_ROOT_SIZE_GIB="80"
 
-ROOT_PASSWORD=""
-USER_PASSWORD=""
+AUTOLOGIN="no"
+AUTOSTART_WM="no"
 
 section() {
 	CURRENT_STEP=$1
@@ -824,6 +824,7 @@ collect_system_stack() {
 	section "Systeme"
 
 	set_yes_no_var ENABLE_MULTILIB "Activer le depot multilib ?" "y" || return "$?"
+	set_yes_no_var PREPARE_CHAOTIC "Ajouter Chaotic-AUR (paquets compiled: mesa-tkg, linux-cachyos…) ?" "n" || return "$?"
 
 	capture_value NETWORK_STACK choose_option "Service reseau a installer" 1 \
 		"networkmanager|NetworkManager - simple et polyvalent" \
@@ -887,6 +888,14 @@ collect_system_stack() {
 			"none|Aucun" \
 			"gdm|GDM" \
 			"sddm|SDDM" || return "$?"
+
+		if [[ "$DISPLAY_MANAGER" == "none" ]]; then
+			set_yes_no_var AUTOLOGIN "Autologin sur TTY1 (connexion automatique sans saisir le mot de passe) ?" "n" || return "$?"
+			set_yes_no_var AUTOSTART_WM "Lancer automatiquement le DE/WM apres le login TTY1 ?" "y" || return "$?"
+		else
+			AUTOLOGIN="no"
+			AUTOSTART_WM="no"
+		fi
 
 		capture_value GPU_VENDOR choose_option "GPU principal" 1 \
 			"amd|AMD" \
@@ -1655,6 +1664,11 @@ build_package_lists() {
 		append_unique OFFICIAL_PACKAGES dbus-broker gvfs thunar
 	fi
 
+	# qt5ct/qt6ct pour le theming Qt sur les WM minimalistes (pas besoin sur GNOME/KDE)
+	if [[ "$DESKTOP_CHOICE" != "gnome" && "$DESKTOP_CHOICE" != "kde" && "$DESKTOP_CHOICE" != "none" ]]; then
+		append_unique OFFICIAL_PACKAGES qt5ct qt6ct
+	fi
+
 	if [[ "$SESSION_STACK" == "x11" || "$SESSION_STACK" == "both" ]]; then
 		append_unique OFFICIAL_PACKAGES xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xinput
 	fi
@@ -2097,7 +2111,7 @@ save_profile_interactive() {
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
 		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
 		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES USE_OS_PROBER \
-		PREPARE_CHAOTIC BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
+		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
 		LVM_SWAP_SIZE_GIB KERNEL_MODE KERNEL_PACKAGE KERNEL_HEADERS_PACKAGE MESA_MODE \
@@ -2258,7 +2272,7 @@ write_target_config() {
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
 		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
 		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES \
-		USE_OS_PROBER PREPARE_CHAOTIC \
+		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -3672,11 +3686,116 @@ EOFI3
 	write_i3status_config
 }
 
+write_gtk_dark_theme() {
+	# GNOME et KDE ont leur propre gestionnaire de themes : ne pas leur imposer nos fichiers.
+	if [[ "$DESKTOP_CHOICE" == "gnome" || "$DESKTOP_CHOICE" == "kde" ]]; then
+		return 0
+	fi
+
+	local user_home="/home/$USERNAME"
+
+	# --- GTK3 ---
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/gtk-3.0"
+	cat > "$user_home/.config/gtk-3.0/settings.ini" <<'EOFGTK3'
+[Settings]
+gtk-theme-name=Adwaita-dark
+gtk-icon-theme-name=Adwaita
+gtk-font-name=Sans 10
+gtk-cursor-theme-name=Adwaita
+gtk-cursor-theme-size=24
+gtk-application-prefer-dark-theme=true
+gtk-button-images=false
+gtk-menu-images=false
+gtk-enable-animations=true
+EOFGTK3
+	chown "$USERNAME:$USERNAME" "$user_home/.config/gtk-3.0/settings.ini"
+
+	# --- GTK4 / libadwaita ---
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/gtk-4.0"
+	cat > "$user_home/.config/gtk-4.0/settings.ini" <<'EOFGTK4'
+[Settings]
+gtk-application-prefer-dark-theme=true
+gtk-icon-theme-name=Adwaita
+gtk-font-name=Sans 10
+gtk-cursor-theme-name=Adwaita
+gtk-cursor-theme-size=24
+EOFGTK4
+	chown "$USERNAME:$USERNAME" "$user_home/.config/gtk-4.0/settings.ini"
+
+	# --- qt5ct : theming Qt5 sombre ---
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/qt5ct"
+	cat > "$user_home/.config/qt5ct/qt5ct.conf" <<'EOFQT5CT'
+[Appearance]
+color_scheme_path=/usr/share/qt5ct/colors/darker.conf
+custom_palette=true
+icon_theme=Adwaita
+standard_dialogs=default
+style=Fusion
+
+[Fonts]
+fixed=@Variant(\0\0\0@\0\0\0\x12\0M\0o\0n\0o\0s\0p\0a\0c\0e@$\0\0\0\0\0\0\xff\xff\xff\xff\x5\x1\0\x32\x10)
+general=@Variant(\0\0\0@\0\0\0\x6\0S\0a\0n\0s@$\0\0\0\0\0\0\xff\xff\xff\xff\x5\x1\0\x32\x10)
+EOFQT5CT
+	chown "$USERNAME:$USERNAME" "$user_home/.config/qt5ct/qt5ct.conf"
+
+	# --- qt6ct : theming Qt6 sombre ---
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/qt6ct"
+	cat > "$user_home/.config/qt6ct/qt6ct.conf" <<'EOFQT6CT'
+[Appearance]
+color_scheme_path=/usr/share/qt6ct/colors/darker.conf
+custom_palette=true
+icon_theme=Adwaita
+standard_dialogs=default
+style=Fusion
+
+[Fonts]
+fixed=@Variant(\0\0\0@\0\0\0\x12\0M\0o\0n\0o\0s\0p\0a\0c\0e@$\0\0\0\0\0\0\xff\xff\xff\xff\x5\x1\0\x32\x10)
+general=@Variant(\0\0\0@\0\0\0\x6\0S\0a\0n\0s@$\0\0\0\0\0\0\xff\xff\xff\xff\x5\x1\0\x32\x10)
+EOFQT6CT
+	chown "$USERNAME:$USERNAME" "$user_home/.config/qt6ct/qt6ct.conf"
+
+	# --- Variables d'environnement GTK + QT ---
+	# Wayland (Hyprland/Sway/labwc) : systemd user environment.d
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/environment.d"
+	cat > "$user_home/.config/environment.d/10-gtk-dark.conf" <<'EOFENV'
+GTK_THEME=Adwaita:dark
+QT_QPA_PLATFORMTHEME=qt5ct
+QT_STYLE_OVERRIDE=Fusion
+EOFENV
+	chown "$USERNAME:$USERNAME" "$user_home/.config/environment.d/10-gtk-dark.conf"
+
+	# X11 (i3/XFCE/LXQt/IceWM) : .xprofile lu par xinit/display manager
+	cat > "$user_home/.xprofile" <<'EOFXPROFILE'
+export GTK_THEME=Adwaita:dark
+export QT_QPA_PLATFORMTHEME=qt5ct
+export QT_STYLE_OVERRIDE=Fusion
+EOFXPROFILE
+	chown "$USERNAME:$USERNAME" "$user_home/.xprofile"
+
+	# --- dconf systemwide : color-scheme prefer-dark pour les apps libadwaita ---
+	# Fonctionne sans session D-Bus active (via le backend keyfile de dconf).
+	install -d -m 0755 /etc/dconf/db/local.d
+	cat > /etc/dconf/db/local.d/00-dark-theme <<'EOFDCONF'
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+gtk-theme='Adwaita-dark'
+icon-theme='Adwaita'
+cursor-theme='Adwaita'
+cursor-size=24
+font-name='Sans 10'
+EOFDCONF
+
+	if command -v dconf >/dev/null 2>&1; then
+		run_logged dconf update
+	fi
+}
+
 write_user_customizations() {
 	section "Personnalisation utilisateur"
 	write_fastfetch_config
 	write_shell_setup
 	write_foot_config
+	write_gtk_dark_theme
 	write_waybar_config
 	write_hyprland_dotfiles
 	write_sway_dotfiles
@@ -3887,6 +4006,42 @@ write_session_helpers() {
 exec $xinit_exec
 XINIT
 			chown "$USERNAME:$USERNAME" "/home/$USERNAME/.xinitrc"
+		fi
+
+		# Autologin via getty systemd override
+		if [[ "$AUTOLOGIN" == "yes" ]]; then
+			install -d -m 0755 /etc/systemd/system/getty@tty1.service.d
+			cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<AUTOLOGIN
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
+AUTOLOGIN
+		fi
+
+		# Autostart WM via .bash_profile / .zprofile
+		if [[ "$AUTOSTART_WM" == "yes" ]]; then
+			local start_cmd=""
+			if [[ -n "$wayland_exec" ]]; then
+				start_cmd="$wayland_exec"
+			elif [[ -n "$xinit_exec" ]]; then
+				start_cmd="exec startx"
+			fi
+			if [[ -n "$start_cmd" ]]; then
+				# Lance le WM uniquement sur TTY1 et uniquement si pas de session graphique active
+				cat > "/home/$USERNAME/.bash_profile" <<BASHPROFILE
+# Auto-start the graphical session on TTY1
+[[ -z "\$DISPLAY" && -z "\$WAYLAND_DISPLAY" && "\$(tty)" == '/dev/tty1' ]] && exec $start_cmd
+BASHPROFILE
+				chown "$USERNAME:$USERNAME" "/home/$USERNAME/.bash_profile"
+
+				if [[ "$USER_SHELL_CHOICE" == "zsh" ]]; then
+					cat > "/home/$USERNAME/.zprofile" <<ZPROFILE
+# Auto-start the graphical session on TTY1
+[[ -z "\$DISPLAY" && -z "\$WAYLAND_DISPLAY" && "\$(tty)" == '/dev/tty1' ]] && exec $start_cmd
+ZPROFILE
+					chown "$USERNAME:$USERNAME" "/home/$USERNAME/.zprofile"
+				fi
+			fi
 		fi
 	fi
 
