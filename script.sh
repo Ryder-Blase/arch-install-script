@@ -42,10 +42,13 @@ ENABLE_MULTILIB="yes"
 ENABLE_AVAHI="yes"
 ENABLE_BLUETOOTH="yes"
 ENABLE_OPENSSH="no"
+INSTALL_PICOM="no"
 USER_SHELL_CHOICE="bash"
 INSTALL_OH_MY_ZSH="no"
 INSTALL_POWERLEVEL10K="no"
 EXTRA_UTILITY_PACKAGES="fastfetch"
+EXTRA_APP_PACKAGES=""
+INSTALL_VIRT_SUITE="no"
 USE_OS_PROBER="yes"
 PREPARE_CHAOTIC="no"
 BOOTLOADER="grub"
@@ -982,6 +985,10 @@ configure_user_extras() {
 
 	section "Utilisateur"
 
+	if [[ "$DESKTOP_CHOICE" == "i3" ]]; then
+		set_yes_no_var INSTALL_PICOM "Installer picom (compositeur X11 pour ombres et transparence) ?" "$([[ "$INSTALL_PICOM" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
+	fi
+
 	capture_value USER_SHELL_CHOICE choose_option "Shell principal pour $USERNAME" "$(option_index_for_key "$USER_SHELL_CHOICE" \
 		"bash|Bash" \
 		"zsh|Zsh")" \
@@ -1000,7 +1007,7 @@ configure_user_extras() {
 		INSTALL_POWERLEVEL10K="no"
 	fi
 
-	capture_value EXTRA_UTILITY_PACKAGES choose_multi_option "Paquets utiles a installer (liste non exhaustive)" "$EXTRA_UTILITY_PACKAGES" \
+	capture_value EXTRA_UTILITY_PACKAGES choose_multi_option "Outils CLI a installer" "$EXTRA_UTILITY_PACKAGES" \
 		"fastfetch|fastfetch - infos systeme stylisees" \
 		"btop|btop - moniteur systeme moderne" \
 		"neovim|neovim - editeur terminal" \
@@ -1013,6 +1020,27 @@ configure_user_extras() {
 		"unzip|unzip - support zip" \
 		"zip|zip - creation d'archives zip" \
 		"reflector|reflector - optimisation des miroirs Arch" || return "$?"
+
+	capture_value EXTRA_APP_PACKAGES choose_multi_option "Applications graphiques a installer" "$EXTRA_APP_PACKAGES" \
+		"chromium|Chromium - navigateur web" \
+		"firefox|Firefox - navigateur web" \
+		"discord|Discord - messagerie et voix" \
+		"telegram-desktop|Telegram - messagerie chiffree" \
+		"thunderbird|Thunderbird - client mail" \
+		"vlc|VLC - lecteur multimedia universel" \
+		"mpv|mpv - lecteur video leger" \
+		"gimp|GIMP - editeur d'images" \
+		"inkscape|Inkscape - dessin vectoriel" \
+		"obs-studio|OBS Studio - streaming et capture" \
+		"kdenlive|Kdenlive - montage video" \
+		"audacity|Audacity - editeur audio" \
+		"steam|Steam - jeux (necessite multilib)" \
+		"lutris|Lutris - lanceur de jeux multi-sources" \
+		"gamemode|Gamemode - optimisation CPU/GPU pour jeux" \
+		"wine|Wine - compatibilite Windows" \
+		"mangohud|MangoHud - overlay performances en jeu" || return "$?"
+
+	set_yes_no_var INSTALL_VIRT_SUITE "Installer la suite QEMU + libvirt + virt-manager ?" "n" || return "$?"
 }
 
 collect_linux_tkg_options() {
@@ -1660,6 +1688,22 @@ build_package_lists() {
 		append_unique OFFICIAL_PACKAGES "${extra_utility_packages[@]}"
 	fi
 
+	local -a extra_app_packages=()
+	read -r -a extra_app_packages <<< "$EXTRA_APP_PACKAGES"
+	if ((${#extra_app_packages[@]})); then
+		append_unique OFFICIAL_PACKAGES "${extra_app_packages[@]}"
+		if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
+			contains_word "gamemode" "${extra_app_packages[@]}" && append_unique OFFICIAL_PACKAGES lib32-gamemode
+			contains_word "wine" "${extra_app_packages[@]}" && append_unique OFFICIAL_PACKAGES lib32-gnutls lib32-libpulse
+			contains_word "mangohud" "${extra_app_packages[@]}" && append_unique OFFICIAL_PACKAGES lib32-mangohud
+		fi
+	fi
+
+	if [[ "$INSTALL_VIRT_SUITE" == "yes" ]]; then
+		append_unique OFFICIAL_PACKAGES qemu-full libvirt virt-manager virt-viewer dnsmasq iptables-nft edk2-ovmf swtpm
+		append_unique SERVICES_TO_ENABLE libvirtd virtlogd
+	fi
+
 	if [[ "$DESKTOP_CHOICE" != "none" ]]; then
 		append_unique OFFICIAL_PACKAGES dbus-broker gvfs thunar
 	fi
@@ -1769,15 +1813,16 @@ build_package_lists() {
 			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		i3)
-			append_unique OFFICIAL_PACKAGES i3-wm i3status i3lock kitty rofi feh picom dunst maim slop xclip brightnessctl playerctl nautilus virt-manager code polkit-gnome
+			append_unique OFFICIAL_PACKAGES i3-wm i3status i3lock kitty rofi feh dunst maim slop xclip brightnessctl playerctl thunar virt-manager code polkit-gnome
+			[[ "$INSTALL_PICOM" == "yes" ]] && append_unique OFFICIAL_PACKAGES picom
 			[[ "$NETWORK_STACK" == "networkmanager" ]] && append_unique OFFICIAL_PACKAGES network-manager-applet
 			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		icewm)
-			append_unique OFFICIAL_PACKAGES icewm icewm-extra xterm
+			append_unique OFFICIAL_PACKAGES icewm icewm-extra xtermsetxkbmap fr-latin9
 			;;
 		sway)
-			append_unique OFFICIAL_PACKAGES sway foot swaybg swayidle swaylock waybar wofi mako grim slurp brightnessctl playerctl nautilus virt-manager code elementary-icon-theme xdg-desktop-portal-wlr polkit-gnome
+			append_unique OFFICIAL_PACKAGES sway foot swaybg swayidle swaylock waybar wofi mako grim slurp brightnessctl playerctl thunar virt-manager code elementary-icon-theme xdg-desktop-portal-wlr polkit-gnome
 			[[ "$NETWORK_STACK" == "networkmanager" ]] && append_unique OFFICIAL_PACKAGES network-manager-applet
 			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
@@ -2110,8 +2155,8 @@ save_profile_interactive() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
 		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES USE_OS_PROBER \
-		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE USE_OS_PROBER \
+		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
 		LVM_SWAP_SIZE_GIB KERNEL_MODE KERNEL_PACKAGE KERNEL_HEADERS_PACKAGE MESA_MODE \
@@ -2271,8 +2316,8 @@ write_target_config() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
 		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES \
-		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE \
+		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -3251,17 +3296,12 @@ set $menu wofi --show drun
 
 bindsym $mod+Return exec $term
 bindsym $mod+d exec $menu
-bindsym $mod+e exec nautilus
+bindsym $mod+e exec thunar
 bindsym $mod+v exec virt-manager
 bindsym $mod+c exec code
 bindsym $mod+Escape exec swaylock -c 000000
 
 bindsym $mod+q kill
-bindsym $mod+f fullscreen toggle
-bindsym $mod+Shift+f fullscreen disable
-bindsym $mod+p floating toggle
-bindsym $mod+t layout toggle split
-bindsym $mod+s exec grim -g "$(slurp)" - | tee ~/Images/screenshot-$(date +%Y-%m-%d-%H%M%S).png | wl-copy
 
 bindsym $mod+Left focus left
 bindsym $mod+Right focus right
@@ -3348,6 +3388,10 @@ bindsym $mod+Shift+q exec swaymsg exit
 EOFSWAY
 
 	chown "$USERNAME:$USERNAME" "$sway_config"
+
+	# Thunar comme gestionnaire de fichiers par defaut
+	run_logged runuser -u "$USERNAME" -- xdg-mime default thunar.desktop inode/directory
+	run_logged runuser -u "$USERNAME" -- xdg-mime default thunar.desktop application/x-gnome-saved-search
 }
 
 write_waybar_config() {
@@ -3562,10 +3606,11 @@ gaps outer 20
 focus_follows_mouse yes
 
 exec_always --no-startup-id sh -c '[ -f "$HOME/Images/wallpaper6.jpg" ] && exec feh --bg-fill "$HOME/Images/wallpaper6.jpg"'
-exec_always --no-startup-id picom
 exec --no-startup-id dunst
 exec --no-startup-id /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
 EOFI3
+
+	[[ "$INSTALL_PICOM" == "yes" ]] && printf 'exec_always --no-startup-id picom\n' >> "$i3_config"
 
 	if [[ "$ENABLE_BLUETOOTH" == "yes" ]]; then
 		printf 'exec --no-startup-id blueman-applet\n' >> "$i3_config"
@@ -3582,17 +3627,12 @@ set $menu rofi -show drun
 
 bindsym $mod+Return exec $term
 bindsym $mod+d exec $menu
-bindsym $mod+e exec nautilus
+bindsym $mod+e exec thunar
 bindsym $mod+v exec virt-manager
 bindsym $mod+c exec code
 bindsym $mod+Escape exec i3lock -c 000000
 
 bindsym $mod+q kill
-bindsym $mod+f fullscreen toggle
-bindsym $mod+Shift+f fullscreen disable
-bindsym $mod+p floating toggle
-bindsym $mod+t layout toggle split
-bindsym $mod+s exec maim -s | tee ~/Images/screenshot-$(date +%Y-%m-%d-%H%M%S).png | xclip -selection clipboard -t image/png
 
 bindsym $mod+Left focus left
 bindsym $mod+Right focus right
@@ -3683,6 +3723,10 @@ bar {
 EOFI3
 
 	chown "$USERNAME:$USERNAME" "$i3_config"
+
+	# Thunar comme gestionnaire de fichiers par defaut
+	run_logged runuser -u "$USERNAME" -- xdg-mime default thunar.desktop inode/directory
+	run_logged runuser -u "$USERNAME" -- xdg-mime default thunar.desktop application/x-gnome-saved-search
 	write_i3status_config
 }
 
@@ -3765,10 +3809,11 @@ EOFENV
 	chown "$USERNAME:$USERNAME" "$user_home/.config/environment.d/10-gtk-dark.conf"
 
 	# X11 (i3/XFCE/LXQt/IceWM) : .xprofile lu par xinit/display manager
-	cat > "$user_home/.xprofile" <<'EOFXPROFILE'
+	cat > "$user_home/.xprofile" <<EOFXPROFILE
 export GTK_THEME=Adwaita:dark
 export QT_QPA_PLATFORMTHEME=qt5ct
 export QT_STYLE_OVERRIDE=Fusion
+setxkbmap $KEYMAP
 EOFXPROFILE
 	chown "$USERNAME:$USERNAME" "$user_home/.xprofile"
 
@@ -4003,6 +4048,7 @@ write_session_helpers() {
 
 		if [[ -n "$xinit_exec" ]]; then
 			cat > "/home/$USERNAME/.xinitrc" <<XINIT
+setxkbmap $KEYMAP
 exec $xinit_exec
 XINIT
 			chown "$USERNAME:$USERNAME" "/home/$USERNAME/.xinitrc"
@@ -4102,6 +4148,7 @@ main() {
 	run_logged mkinitcpio -P || true
 	configure_bootloader
 	enable_services
+	[[ "$INSTALL_VIRT_SUITE" == "yes" ]] && run_logged usermod -aG libvirt "$USERNAME"
 	write_user_customizations
 	write_session_helpers
 	cleanup_sensitive_files
