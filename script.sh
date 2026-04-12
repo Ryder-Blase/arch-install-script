@@ -2478,20 +2478,21 @@ SUDOERS
 }
 
 resolve_kernel_pkgbase() {
-	local pkgbase_file detected=""
+	local pkgbase_file detected="" candidate
 
+	# Priorite 1 : vmlinuz deja present pour KERNEL_PACKAGE connu
 	if [[ -n "$KERNEL_PACKAGE" && -e "/boot/vmlinuz-$KERNEL_PACKAGE" ]]; then
 		printf '%s\n' "$KERNEL_PACKAGE"
 		return 0
 	fi
 
+	# Priorite 2 : lire /usr/lib/modules/*/pkgbase — prefer tkg
 	for pkgbase_file in /usr/lib/modules/*/pkgbase; do
 		[[ -f "$pkgbase_file" ]] || continue
-		if [[ -z "$detected" ]]; then
-			detected=$(<"$pkgbase_file")
-		fi
-		if grep -q 'tkg' "$pkgbase_file"; then
-			cat "$pkgbase_file"
+		candidate=$(<"$pkgbase_file")
+		[[ -z "$detected" ]] && detected="$candidate"
+		if [[ "$candidate" == *tkg* ]]; then
+			printf '%s\n' "$candidate"
 			return 0
 		fi
 	done
@@ -3914,7 +3915,7 @@ install_paru_if_needed() {
 }
 
 install_repo_kernel_if_needed() {
-	local repo_url_quoted repo_name build_dir detected_pkgbase
+	local repo_url_quoted repo_name detected_pkgbase
 
 	if [[ "$KERNEL_MODE" != "repo" ]]; then
 		return 0
@@ -3924,10 +3925,11 @@ install_repo_kernel_if_needed() {
 	ensure_user_build_dir
 
 	repo_name="linux-tkg"
-	build_dir="/home/$USERNAME/builds/${repo_name}-build"
 	repo_url_quoted=$(printf '%q' "$KERNEL_REPO_URL")
-	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; cd ~/builds; if [[ -d ${repo_name}-src/.git ]]; then cd ${repo_name}-src; git pull --ff-only; else git clone $repo_url_quoted ${repo_name}-src; fi; rm -rf ${repo_name}-build; mkdir -p ${repo_name}-build; rsync -a --delete --exclude=.git ${repo_name}-src/ ${repo_name}-build/"
-	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; cd ~/builds/${repo_name}-build; makepkg -si --noconfirm --needed"
+
+	# Clone ou mise a jour — build directement dans le clone (linux-tkg exige un vrai depot git)
+	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; cd ~/builds; if [[ -d ${repo_name}-src/.git ]]; then cd ${repo_name}-src; git pull --ff-only; else git clone $repo_url_quoted ${repo_name}-src; fi"
+	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; cd ~/builds/${repo_name}-src; makepkg -si --noconfirm --needed"
 
 	detected_pkgbase=$(resolve_kernel_pkgbase)
 	KERNEL_PACKAGE="$detected_pkgbase"
