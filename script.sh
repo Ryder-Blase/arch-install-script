@@ -49,6 +49,7 @@ INSTALL_POWERLEVEL10K="no"
 EXTRA_UTILITY_PACKAGES="fastfetch"
 EXTRA_APP_PACKAGES=""
 INSTALL_VIRT_SUITE="no"
+GAMING_TWEAKS="no"
 USE_OS_PROBER="yes"
 PREPARE_CHAOTIC="no"
 BOOTLOADER="grub"
@@ -1041,6 +1042,16 @@ configure_user_extras() {
 		"mangohud|MangoHud - overlay performances en jeu" || return "$?"
 
 	set_yes_no_var INSTALL_VIRT_SUITE "Installer la suite QEMU + libvirt + virt-manager ?" "n" || return "$?"
+
+	# Auto-suggere si des paquets gaming sont selectionnes
+	local gaming_default="n"
+	for _pkg in steam lutris gamemode wine mangohud; do
+		if [[ " $EXTRA_APP_PACKAGES " == *" $_pkg "* ]]; then
+			gaming_default="y"
+			break
+		fi
+	done
+	set_yes_no_var GAMING_TWEAKS "Appliquer les tweaks gaming (latence PCI, vsync OpenGL) ?" "$gaming_default" || return "$?"
 }
 
 collect_linux_tkg_options() {
@@ -2186,7 +2197,7 @@ save_profile_interactive() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
 		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE USE_OS_PROBER \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE GAMING_TWEAKS USE_OS_PROBER \
 		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -2347,7 +2358,7 @@ write_target_config() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
 		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE GAMING_TWEAKS \
 		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
@@ -2542,20 +2553,44 @@ build_kernel_cmdline() {
 configure_mkinitcpio() {
 	local hooks
 
-	case "$STORAGE_STACK" in
-		standard)
-			hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck"
-			;;
-		luks)
-			hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck"
-			;;
-		luks-lvm)
-			hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt lvm2 filesystems fsck"
-			;;
-		*)
-			die "Stack de stockage non pris en charge pour mkinitcpio: $STORAGE_STACK"
-			;;
-	esac
+	if [[ "$GAMING_TWEAKS" == "yes" ]]; then
+		# Hooks systemd-based : boot plus rapide, initramfs allege
+		case "$STORAGE_STACK" in
+			standard)
+				hooks="systemd autodetect kms block filesystems"
+				;;
+			luks)
+				hooks="systemd autodetect kms block sd-encrypt filesystems"
+				;;
+			luks-lvm)
+				hooks="systemd autodetect kms block sd-encrypt lvm2 filesystems"
+				;;
+			*)
+				die "Stack de stockage non pris en charge pour mkinitcpio: $STORAGE_STACK"
+				;;
+		esac
+		# Compression lz4 : decompression tres rapide au boot
+		if grep -Eq '^COMPRESSION=' /etc/mkinitcpio.conf; then
+			sed -i 's/^COMPRESSION=.*/COMPRESSION="lz4"/' /etc/mkinitcpio.conf
+		else
+			printf '\nCOMPRESSION="lz4"\n' >> /etc/mkinitcpio.conf
+		fi
+	else
+		case "$STORAGE_STACK" in
+			standard)
+				hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck"
+				;;
+			luks)
+				hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck"
+				;;
+			luks-lvm)
+				hooks="base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt lvm2 filesystems fsck"
+				;;
+			*)
+				die "Stack de stockage non pris en charge pour mkinitcpio: $STORAGE_STACK"
+				;;
+		esac
+	fi
 
 	if grep -Eq '^HOOKS=' /etc/mkinitcpio.conf; then
 		sed -i "s/^HOOKS=.*/HOOKS=($hooks)/" /etc/mkinitcpio.conf
@@ -3867,6 +3902,87 @@ EOFDCONF
 	fi
 }
 
+write_gaming_tweaks() {
+	[[ "$GAMING_TWEAKS" == "yes" ]] || return 0
+
+	section "Tweaks gaming"
+
+	# Service systemd : latences PCI pour reduire la latence GPU/CPU en jeu
+	cat > /etc/systemd/system/pci-latency-gaming.service <<'PCISVC'
+[Unit]
+Description=Set PCI Express latencies for gaming
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'setpci -v -s "*:*" latency_timer=20; setpci -v -s "0:0" latency_timer=0; setpci -v -d "*:*:04xx" latency_timer=80'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+PCISVC
+	run_logged systemctl enable pci-latency-gaming.service
+
+	# drirc : desactive le vsync OpenGL (vblank_mode=0) pour eviter le plafonnement au refresh rate
+	cat > /etc/drirc <<'DRIRC'
+<driconf>
+   <device>
+       <application name="Default">
+           <option name="vblank_mode" value="0" />
+       </application>
+   </device>
+</driconf>
+DRIRC
+
+	# Variables d'environnement gaming
+	cat >> /etc/environment <<'ENVGAMING'
+
+# --- Gaming tweaks ---
+MESA_NO_ERROR=1
+MESA_SHADER_CACHE=1
+MESA_GLTHREAD=true
+vblank_mode=0
+DRI_NO_MSAA=1
+RADV_PERFTEST=aco,bolist,fastclears,finject,nggc,dpbb,dpp,tc_compat_cm,shader_object,zerovram
+RADV_TEX_ANISO=0
+RADV_TESS_FACTOR_LIMIT=1
+WINEDEBUG=-all,fixme-all
+MESA_NO_DITHER=1
+MESA_DEBUG=silent
+DXVK_LOG_LEVEL=none
+VKD3D_DEBUG=none
+VKD3D_SHADER_DEBUG=none
+MALLOCCHECK=0
+MALLOC_TRIM_THRESHOLD_=131072
+MALLOC_MMAP_THRESHOLD_=131072
+MALLOC_MMAP_MAX_=65536
+ENVGAMING
+
+	# Limites systeme : fichiers ouverts, threads, priorite temps-reel, memlock
+	cat >> /etc/security/limits.conf <<LIMITSGAMING
+
+# --- Gaming tweaks ---
+* soft nofile 524288
+* hard nofile 1048576
+* soft nproc 32768
+* hard nproc 65536
+
+$USERNAME soft rtprio 10
+$USERNAME hard rtprio 20
+$USERNAME - nice -10
+$USERNAME soft memlock unlimited
+$USERNAME hard memlock unlimited
+$USERNAME soft stack 8192
+$USERNAME hard stack 16384
+
+root soft rtprio 99
+root hard rtprio 99
+root - nice -20
+root soft memlock unlimited
+root hard memlock unlimited
+LIMITSGAMING
+}
+
 write_user_customizations() {
 	section "Personnalisation utilisateur"
 	write_fastfetch_config
@@ -3877,6 +3993,7 @@ write_user_customizations() {
 	write_hyprland_dotfiles
 	write_sway_dotfiles
 	write_i3_dotfiles
+	write_gaming_tweaks
 }
 
 sync_and_install_packages() {
