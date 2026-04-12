@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME=$(basename "$0")
-SCRIPT_VERSION="2026-04-10-hypr-clean"
+SCRIPT_VERSION="2026-04-12-main-ui-polish"
 WORKDIR="/tmp/arch-installer"
 LOG_FILE="$WORKDIR/install.log"
 TARGET_MOUNT="/mnt"
@@ -14,6 +14,7 @@ UI_WIDTH=86
 UI_MENU_HEIGHT=14
 DEBUG_INSTALL="yes"
 CURRENT_STEP="Initialisation"
+UI_CANCEL_STATUS=252
 
 mkdir -p "$WORKDIR"
 touch "$LOG_FILE"
@@ -141,7 +142,68 @@ handle_error() {
 	exit "$exit_code"
 }
 
+handle_interrupt() {
+	local signal_name=${1:-INT}
+
+	trap - ERR INT TERM
+	printf '\n[WARN] Interruption recue (%s). Installation stoppee.\n' "$signal_name" >&2
+	printf '[WARN] Log: %s\n' "$LOG_FILE" >&2
+	exit 130
+}
+
 trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_interrupt INT' INT
+trap 'handle_interrupt TERM' TERM
+
+is_ui_cancel_status() {
+	[[ "${1:-0}" -eq "$UI_CANCEL_STATUS" ]]
+}
+
+capture_value() {
+	local var_name=$1
+	shift
+	local value status=0
+
+	value=$("$@") || status=$?
+	if is_ui_cancel_status "$status"; then
+		return "$UI_CANCEL_STATUS"
+	fi
+	if (( status != 0 )); then
+		return "$status"
+	fi
+
+	printf -v "$var_name" '%s' "$value"
+}
+
+set_yes_no_var() {
+	local var_name=$1
+	local prompt=$2
+	local default=${3:-y}
+	local status=0
+
+	if prompt_yes_no "$prompt" "$default"; then
+		printf -v "$var_name" 'yes'
+		return 0
+	fi
+
+	status=$?
+	if is_ui_cancel_status "$status"; then
+		return "$UI_CANCEL_STATUS"
+	fi
+
+	printf -v "$var_name" 'no'
+}
+
+run_menu_action() {
+	local status=0
+
+	"$@" || status=$?
+	if is_ui_cancel_status "$status"; then
+		return 0
+	fi
+
+	return "$status"
+}
 
 append_unique() {
 	local -n array_ref=$1
@@ -238,8 +300,7 @@ prompt_yes_no() {
 				return 1
 				;;
 			*)
-				[[ "$default" == "y" ]]
-				return
+				return "$UI_CANCEL_STATUS"
 				;;
 		esac
 	fi
@@ -270,10 +331,13 @@ prompt_yes_no() {
 prompt_with_default() {
 	local prompt=$1
 	local default=$2
-	local reply
+	local reply status=0
 
 	if use_tui; then
-		reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Saisie" --inputbox "$prompt" 11 "$UI_WIDTH" "$default") || true
+		reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Saisie" --inputbox "$prompt" 11 "$UI_WIDTH" "$default") || status=$?
+		if (( status != 0 )); then
+			return "$UI_CANCEL_STATUS"
+		fi
 		printf '%s\n' "${reply:-$default}"
 		return 0
 	fi
@@ -284,11 +348,14 @@ prompt_with_default() {
 
 prompt_non_empty() {
 	local prompt=$1
-	local reply
+	local reply status=0
 
 	while true; do
 		if use_tui; then
-			reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Saisie" --inputbox "$prompt" 11 "$UI_WIDTH" "") || true
+			reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Saisie" --inputbox "$prompt" 11 "$UI_WIDTH" "") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 		else
 		read -rp "$prompt: " reply
 		fi
@@ -307,11 +374,14 @@ prompt_non_empty() {
 prompt_positive_integer() {
 	local prompt=$1
 	local default=$2
-	local reply
+	local reply status=0
 
 	while true; do
 		if use_tui; then
-			reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Nombre" --inputbox "$prompt" 11 "$UI_WIDTH" "$default") || true
+			reply=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Nombre" --inputbox "$prompt" 11 "$UI_WIDTH" "$default") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 		else
 			read -rp "$prompt [$default]: " reply
 		fi
@@ -330,16 +400,22 @@ prompt_positive_integer() {
 
 prompt_password_twice() {
 	local prompt=$1
-	local first second
+	local first second status=0
 
 	while true; do
 		if use_tui; then
-			first=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Mot de passe" --passwordbox "$prompt" 11 "$UI_WIDTH") || true
+			first=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Mot de passe" --passwordbox "$prompt" 11 "$UI_WIDTH") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 			if [[ -z "$first" ]]; then
 				show_message "Mot de passe requis" "Le mot de passe ne peut pas etre vide."
 				continue
 			fi
-			second=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Confirmation" --passwordbox "Confirmer $prompt" 11 "$UI_WIDTH") || true
+			second=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Confirmation" --passwordbox "Confirmer $prompt" 11 "$UI_WIDTH") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 		else
 		read -rsp "$prompt: " first
 		printf '\n'
@@ -375,7 +451,7 @@ choose_option() {
 	local default_index=$2
 	shift 2
 	local -a options=("$@")
-	local choice label key index output
+	local choice label key index output status=0
 
 	if use_tui; then
 		local -a menu_args=()
@@ -384,7 +460,10 @@ choose_option() {
 			label=${choice#*|}
 			menu_args+=("$key" "$label")
 		done
-		output=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Selection" --default-item "${options[default_index-1]%%|*}" --menu "$prompt" "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${menu_args[@]}") || true
+		output=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Selection" --default-item "${options[default_index-1]%%|*}" --menu "$prompt" "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${menu_args[@]}") || status=$?
+		if (( status != 0 )); then
+			return "$UI_CANCEL_STATUS"
+		fi
 		printf '%s\n' "${output:-${options[default_index-1]%%|*}}"
 		return 0
 	fi
@@ -469,8 +548,7 @@ choose_multi_option() {
 
 		output=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Selection multiple" --checklist "$prompt" 24 110 14 "${checklist_args[@]}") || status=$?
 		if (( status != 0 )); then
-			printf '%s\n' "$current_values"
-			return 0
+			return "$UI_CANCEL_STATUS"
 		fi
 
 		output=${output//\"/}
@@ -515,7 +593,7 @@ list_disks() {
 }
 
 select_disk() {
-	local disk label
+	local disk label status=0
 	local -a disk_options=()
 
 	if use_tui; then
@@ -526,7 +604,10 @@ select_disk() {
 		done < <(lsblk -dn -o PATH,TYPE | awk '$2 == "disk" {print $1}')
 
 		if (( ${#disk_options[@]} > 0 )); then
-			disk=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Disque cible" --menu "Choisis le disque cible pour l'installation." "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${disk_options[@]}") || true
+			disk=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Choix du disque" --menu "Choisis le disque qui recevra l'installation." "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${disk_options[@]}") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 			if [[ -n "$disk" && -b "$disk" ]]; then
 				printf '%s\n' "$disk"
 				return 0
@@ -535,23 +616,23 @@ select_disk() {
 	fi
 
 	while true; do
-		section "Disques detectes"
+		section "Disques disponibles"
 		list_block_devices
-		disk=$(prompt_non_empty "Disque cible (ex: /dev/nvme0n1)" )
+		disk=$(prompt_non_empty "Chemin du disque cible (ex: /dev/nvme0n1)")
 
 		if [[ -b "$disk" ]] && [[ "$(lsblk -dn -o TYPE "$disk")" == "disk" ]]; then
 			printf '%s\n' "$disk"
 			return 0
 		fi
 
-		warn "Le disque choisi est invalide."
+		warn "Le disque saisi n'est pas valide."
 	done
 }
 
 prompt_partition() {
 	local prompt=$1
 	local allow_empty=${2:-no}
-	local part default_tag
+	local part default_tag status=0
 	local -a part_options=()
 
 	if use_tui; then
@@ -561,14 +642,17 @@ prompt_partition() {
 		done < <(lsblk -rpn -o PATH,TYPE | awk '$2 != "disk" && $2 != "rom" {print $1}')
 
 		if [[ "$allow_empty" == "yes" ]]; then
-			part_options=("__skip__" "Ignorer / aucun" "${part_options[@]}")
+			part_options=("__skip__" "Ne pas utiliser cette partition" "${part_options[@]}")
 			default_tag="__skip__"
 		else
 			default_tag="${part_options[0]:-}"
 		fi
 
 		if (( ${#part_options[@]} > 0 )); then
-			part=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Selection de partition" --default-item "$default_tag" --menu "$prompt" "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${part_options[@]}") || true
+			part=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Choix de partition" --default-item "$default_tag" --menu "$prompt" "$UI_HEIGHT" "$UI_WIDTH" "$UI_MENU_HEIGHT" "${part_options[@]}") || status=$?
+			if (( status != 0 )); then
+				return "$UI_CANCEL_STATUS"
+			fi
 			if [[ "$part" == "__skip__" ]]; then
 				printf '\n'
 				return 0
@@ -581,6 +665,7 @@ prompt_partition() {
 	fi
 
 	while true; do
+		section "Partitions disponibles"
 		list_block_devices
 		if [[ "$allow_empty" == "yes" ]]; then
 			read -rp "$prompt (laisser vide pour ignorer): " part
@@ -597,7 +682,7 @@ prompt_partition() {
 			return 0
 		fi
 
-		warn "Partition invalide."
+		warn "La partition saisie n'est pas valide."
 	done
 }
 
@@ -638,18 +723,18 @@ detect_or_prompt_filesystem() {
 			printf '%s\n' "$detected"
 			;;
 		*)
-			ask_filesystem "Filesystem pour $partition" "$fallback_index"
+			ask_filesystem "Systeme de fichiers pour $partition" "$fallback_index"
 			;;
 	esac
 }
 
 ensure_target_mount_available() {
 	if mountpoint -q "$TARGET_MOUNT"; then
-		warn "$TARGET_MOUNT est deja monte."
-		if prompt_yes_no "Tout demonter sous $TARGET_MOUNT avant de continuer ?" "y"; then
+		warn "Le point de montage $TARGET_MOUNT est deja utilise."
+		if prompt_yes_no "Tout demonter sous $TARGET_MOUNT avant de preparer l'installation ?" "y"; then
 			umount -R "$TARGET_MOUNT"
 		else
-			die "Impossible de continuer avec $TARGET_MOUNT occupe."
+			die "Impossible de preparer l'installation tant que $TARGET_MOUNT est occupe."
 		fi
 	fi
 
@@ -658,9 +743,9 @@ ensure_target_mount_available() {
 
 configure_live_network() {
 	local mode=${1:-interactive}
-	local prompt_message network_ok="no"
+	local prompt_message network_ok="no" choice
 
-	section "Verification du reseau live"
+	section "Reseau live"
 
 	if ip route get 1.1.1.1 >/dev/null 2>&1 && ping -n -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
 		network_ok="yes"
@@ -669,104 +754,105 @@ configure_live_network() {
 	fi
 
 	if [[ "$network_ok" == "yes" ]]; then
-		info "Connectivite OK."
+		info "Connexion Internet detectee dans l'environnement live."
 		return 0
 	fi
 
 	if [[ "$mode" == "noninteractive" ]]; then
-		warn "Connectivite non verifiee automatiquement. Installation poursuivie; pacstrap echouera si le reseau live n'est pas pret."
+		warn "La connectivite n'a pas pu etre validee automatiquement. L'installation continue; pacstrap echouera si le reseau du live n'est pas pret."
 		return 0
 	fi
 
-	prompt_message="Aucune connectivite rapide detectee depuis le live ISO.
+	prompt_message="Aucune connexion Internet n'a ete validee dans l'environnement live.
 
-Tu peux ouvrir iwctl maintenant, continuer quand meme, ou annuler.
-Si tu sais que le reseau fonctionne deja, choisis Continuer."
+Tu peux ouvrir iwctl pour configurer le Wi-Fi, poursuivre sans verification,
+ou annuler pour revenir en arriere."
 
-	warn "Pas d'acces reseau detecte depuis le live."
-	case "$(choose_option "$prompt_message" 2 \
-			"iwctl|Lancer iwctl maintenant" \
-			"continue|Continuer quand meme" \
-			"abort|Annuler l'installation")" in
+	warn "Aucune connexion Internet validee pour le live."
+	capture_value choice choose_option "$prompt_message" 2 \
+		"iwctl|Ouvrir iwctl pour configurer le Wi-Fi" \
+		"continue|Continuer sans verification reseau" \
+		"abort|Annuler pour revenir au live" || return "$?"
+	case "$choice" in
 		iwctl)
 			run_interactive_command iwctl
 			if ip route get 1.1.1.1 >/dev/null 2>&1 && ping -n -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
-				info "Connectivite OK apres configuration manuelle."
+				info "Connexion Internet detectee apres configuration manuelle."
 			else
-				warn "Toujours pas de connectivite verifiee. Pacstrap risque d'echouer."
+				warn "Toujours aucune connexion validee. Pacstrap risque d'echouer."
 			fi
 			;;
 		continue)
-			warn "Execution continuee sans connectivite verifiee."
+			warn "Installation poursuivie sans verification reseau."
 			;;
 		abort)
-			die "Installation annulee."
+			die "Installation annulee a ta demande."
 			;;
 	esac
 }
 
 collect_identity() {
-	section "Identite systeme"
-	HOSTNAME=$(prompt_with_default "Hostname" "$HOSTNAME")
-	USERNAME=$(prompt_with_default "Utilisateur principal" "$USERNAME")
-	TIMEZONE=$(prompt_with_default "Timezone" "$TIMEZONE")
-	LOCALE=$(prompt_with_default "Locale" "$LOCALE")
-	KEYMAP=$(prompt_with_default "Keymap console" "$KEYMAP")
+	local status=0
 
-	ROOT_PASSWORD=$(prompt_password_twice "Mot de passe root")
+	section "Identite"
+	capture_value HOSTNAME prompt_with_default "Hostname" "$HOSTNAME" || return "$?"
+	capture_value USERNAME prompt_with_default "Utilisateur principal" "$USERNAME" || return "$?"
+	capture_value TIMEZONE prompt_with_default "Timezone" "$TIMEZONE" || return "$?"
+	capture_value LOCALE prompt_with_default "Locale" "$LOCALE" || return "$?"
+	capture_value KEYMAP prompt_with_default "Keymap console" "$KEYMAP" || return "$?"
+
+	capture_value ROOT_PASSWORD prompt_password_twice "Mot de passe root" || return "$?"
 	if prompt_yes_no "Utiliser le meme mot de passe pour $USERNAME ?" "y"; then
 		USER_PASSWORD=$ROOT_PASSWORD
 	else
-		USER_PASSWORD=$(prompt_password_twice "Mot de passe pour $USERNAME")
+		status=$?
+		if is_ui_cancel_status "$status"; then
+			return "$status"
+		fi
+		capture_value USER_PASSWORD prompt_password_twice "Mot de passe pour $USERNAME" || return "$?"
 	fi
 
-	CPU_VENDOR=$(choose_option "Microcode CPU" 1 \
+	capture_value CPU_VENDOR choose_option "Microcode CPU" 1 \
 		"amd|AMD" \
 		"intel|Intel" \
-		"none|Aucun")
+		"none|Aucun" || return "$?"
 }
 
 collect_system_stack() {
-	section "Stack systeme"
+	local kernel_choice status=0
 
-	if prompt_yes_no "Activer multilib ?" "y"; then
-		ENABLE_MULTILIB="yes"
-	else
-		ENABLE_MULTILIB="no"
-	fi
+	section "Systeme"
 
-	NETWORK_STACK=$(choose_option "Reseau cible" 1 \
-		"networkmanager|NetworkManager" \
-		"systemd-networkd|systemd-networkd + resolved" \
-		"iwd|iwd standalone + resolved" \
-		"none|Aucun service reseau auto")
+	set_yes_no_var ENABLE_MULTILIB "Activer le depot multilib ?" "y" || return "$?"
 
-	AUDIO_STACK=$(choose_option "Stack audio" 1 \
-		"pipewire|PipeWire" \
-		"pulseaudio|PulseAudio" \
-		"none|ALSA uniquement")
+	capture_value NETWORK_STACK choose_option "Service reseau a installer" 1 \
+		"networkmanager|NetworkManager - simple et polyvalent" \
+		"systemd-networkd|systemd-networkd + resolved - leger et natif" \
+		"iwd|iwd + resolved - Wi-Fi minimal" \
+		"none|Aucun service reseau active par defaut" || return "$?"
 
-	BOOTLOADER=$(choose_option "Bootloader UEFI" 1 \
-		"grub|GRUB" \
-		"systemd-boot|systemd-boot")
+	capture_value AUDIO_STACK choose_option "Pile audio a installer" 1 \
+		"pipewire|PipeWire - moderne et polyvalent" \
+		"pulseaudio|PulseAudio - compatibilite classique" \
+		"none|ALSA uniquement - installation minimale" || return "$?"
+
+	capture_value BOOTLOADER choose_option "Chargeur de demarrage UEFI" 1 \
+		"grub|GRUB - flexible et pratique en multi-boot" \
+		"systemd-boot|systemd-boot - simple et leger pour Arch" || return "$?"
 
 	case "$BOOTLOADER" in
 		grub)
 			EFI_MOUNT_TARGET="/boot/efi"
-			if prompt_yes_no "Activer os-prober pour detecter les autres OS dans GRUB ?" "y"; then
-				USE_OS_PROBER="yes"
-			else
-				USE_OS_PROBER="no"
-			fi
+			set_yes_no_var USE_OS_PROBER "Activer os-prober pour detecter automatiquement les autres OS dans GRUB ?" "y" || return "$?"
 			;;
 		systemd-boot)
 			EFI_MOUNT_TARGET="/boot"
 			USE_OS_PROBER="no"
-			warn "systemd-boot monte l'ESP sur /boot et y stocke noyau/initramfs. Verifie la taille disponible, surtout en dualboot."
+			warn "systemd-boot utilisera l'ESP montee sur /boot pour y stocker noyau et initramfs. Verifie sa taille, surtout en dual boot."
 			;;
 	esac
 
-	DESKTOP_CHOICE=$(choose_option "Environnement de bureau / WM" 1 \
+	capture_value DESKTOP_CHOICE choose_option "Environnement de bureau / WM" 1 \
 		"gnome|GNOME" \
 		"kde|KDE Plasma" \
 		"xfce|XFCE" \
@@ -776,14 +862,14 @@ collect_system_stack() {
 		"icewm|IceWM" \
 		"sway|Sway" \
 		"labwc|Labwc" \
-		"none|Aucun (TTY only)")
+		"none|Aucun (TTY only)" || return "$?"
 
 	case "$DESKTOP_CHOICE" in
 		gnome|kde)
-			SESSION_STACK=$(choose_option "Session graphique" 3 \
+			capture_value SESSION_STACK choose_option "Session graphique" 3 \
 				"x11|X11 uniquement" \
 				"wayland|Wayland uniquement" \
-				"both|X11 + Wayland")
+				"both|X11 + Wayland" || return "$?"
 			;;
 		xfce|lxqt|i3|icewm)
 			SESSION_STACK="x11"
@@ -797,38 +883,38 @@ collect_system_stack() {
 	esac
 
 	if [[ "$DESKTOP_CHOICE" != "none" ]]; then
-		DISPLAY_MANAGER=$(choose_option "Gestionnaire de session" 1 \
+		capture_value DISPLAY_MANAGER choose_option "Gestionnaire de session" 1 \
 			"none|Aucun" \
 			"gdm|GDM" \
-			"sddm|SDDM")
+			"sddm|SDDM" || return "$?"
 
-		GPU_VENDOR=$(choose_option "GPU principal" 1 \
+		capture_value GPU_VENDOR choose_option "GPU principal" 1 \
 			"amd|AMD" \
 			"intel|Intel" \
 			"amd-intel|AMD + Intel" \
 			"nvidia|NVIDIA proprietaire" \
-			"generic|Generique / VM")
+			"generic|Generique / VM" || return "$?"
 
 		if [[ "$GPU_VENDOR" == "nvidia" ]]; then
 			MESA_MODE="nvidia"
 			CUSTOM_MESA_PACKAGE=""
 			CUSTOM_MESA_LIB32_PACKAGE=""
 		else
-			MESA_MODE=$(choose_option "Source de Mesa" 1 \
+			capture_value MESA_MODE choose_option "Source de Mesa" 1 \
 				"official|Mesa officiel" \
 				"chaotic|Package Mesa custom via Chaotic-AUR" \
-				"aur|Package Mesa custom via AUR")
+				"aur|Package Mesa custom via AUR" || return "$?"
 
 			if [[ "$MESA_MODE" == "chaotic" ]]; then
 				PREPARE_CHAOTIC="yes"
-				CUSTOM_MESA_PACKAGE=$(prompt_with_default "Package Mesa custom (ex: mesa-tkg-git, mesa-git)" "mesa-tkg-git")
+				capture_value CUSTOM_MESA_PACKAGE prompt_with_default "Package Mesa custom (ex: mesa-tkg-git, mesa-git)" "mesa-tkg-git" || return "$?"
 				if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
-					CUSTOM_MESA_LIB32_PACKAGE=$(prompt_with_default "Package lib32 associe" "lib32-$CUSTOM_MESA_PACKAGE")
+					capture_value CUSTOM_MESA_LIB32_PACKAGE prompt_with_default "Package lib32 associe" "lib32-$CUSTOM_MESA_PACKAGE" || return "$?"
 				fi
 			elif [[ "$MESA_MODE" == "aur" ]]; then
-				CUSTOM_MESA_PACKAGE=$(prompt_with_default "Package Mesa AUR a compiler" "mesa-git")
+				capture_value CUSTOM_MESA_PACKAGE prompt_with_default "Package Mesa AUR a compiler" "mesa-git" || return "$?"
 				if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
-					CUSTOM_MESA_LIB32_PACKAGE=$(prompt_with_default "Package lib32 AUR associe" "lib32-$CUSTOM_MESA_PACKAGE")
+					capture_value CUSTOM_MESA_LIB32_PACKAGE prompt_with_default "Package lib32 AUR associe" "lib32-$CUSTOM_MESA_PACKAGE" || return "$?"
 				fi
 			fi
 		fi
@@ -838,16 +924,14 @@ collect_system_stack() {
 		MESA_MODE="headless"
 	fi
 
-	local kernel_choice
-
-	kernel_choice=$(choose_option "Noyau Linux" 1 \
+	capture_value kernel_choice choose_option "Noyau Linux" 1 \
 			"linux|linux (officiel)" \
 			"linux-lts|linux-lts (officiel)" \
 			"linux-zen|linux-zen (officiel)" \
 			"linux-hardened|linux-hardened (officiel)" \
 			"linux-tkg-repo|Compiler linux-tkg depuis le depot Git" \
 			"chaotic-custom|Autre package noyau via Chaotic-AUR" \
-			"aur-custom|Compiler un noyau custom via AUR")
+			"aur-custom|Compiler un noyau custom via AUR" || return "$?"
 
 	case "$kernel_choice" in
 		linux|linux-lts|linux-zen|linux-hardened)
@@ -865,58 +949,41 @@ collect_system_stack() {
 		chaotic-custom)
 			KERNEL_MODE="chaotic"
 			PREPARE_CHAOTIC="yes"
-			KERNEL_PACKAGE=$(prompt_non_empty "Package noyau Chaotic-AUR (nom exact, ex: linux-cachyos)")
-			KERNEL_HEADERS_PACKAGE=$(prompt_with_default "Package headers associe" "${KERNEL_PACKAGE}-headers")
+			capture_value KERNEL_PACKAGE prompt_non_empty "Package noyau Chaotic-AUR (nom exact, ex: linux-cachyos)" || return "$?"
+			capture_value KERNEL_HEADERS_PACKAGE prompt_with_default "Package headers associe" "${KERNEL_PACKAGE}-headers" || return "$?"
 			KERNEL_REPO_URL=""
 			;;
 		aur-custom)
 			KERNEL_MODE="aur"
-			KERNEL_PACKAGE=$(prompt_non_empty "Package noyau AUR a compiler (nom exact)")
-			KERNEL_HEADERS_PACKAGE=$(prompt_with_default "Package headers associe" "${KERNEL_PACKAGE}-headers")
+			capture_value KERNEL_PACKAGE prompt_non_empty "Package noyau AUR a compiler (nom exact)" || return "$?"
+			capture_value KERNEL_HEADERS_PACKAGE prompt_with_default "Package headers associe" "${KERNEL_PACKAGE}-headers" || return "$?"
 			KERNEL_REPO_URL=""
 			;;
 	esac
 
-	if prompt_yes_no "Activer avahi pour la decouverte reseau locale ?" "y"; then
-		ENABLE_AVAHI="yes"
-	else
-		ENABLE_AVAHI="no"
-	fi
+	set_yes_no_var ENABLE_AVAHI "Activer Avahi pour la decouverte locale (mDNS / .local) ?" "y" || return "$?"
+	set_yes_no_var ENABLE_BLUETOOTH "Activer Bluetooth au demarrage ?" "y" || return "$?"
+	set_yes_no_var ENABLE_OPENSSH "Installer et activer OpenSSH ?" "n" || return "$?"
 
-	if prompt_yes_no "Activer Bluetooth ?" "y"; then
-		ENABLE_BLUETOOTH="yes"
-	else
-		ENABLE_BLUETOOTH="no"
-	fi
-
-	if prompt_yes_no "Activer OpenSSH ?" "n"; then
-		ENABLE_OPENSSH="yes"
-	else
-		ENABLE_OPENSSH="no"
-	fi
-
-	configure_user_extras
+	configure_user_extras || return "$?"
 }
 
 configure_user_extras() {
-	section "Extras utilisateur"
+	local status=0
 
-	USER_SHELL_CHOICE=$(choose_option "Shell principal pour $USERNAME" "$(option_index_for_key "$USER_SHELL_CHOICE" \
+	section "Utilisateur"
+
+	capture_value USER_SHELL_CHOICE choose_option "Shell principal pour $USERNAME" "$(option_index_for_key "$USER_SHELL_CHOICE" \
 		"bash|Bash" \
 		"zsh|Zsh")" \
 		"bash|Bash" \
-		"zsh|Zsh")
+		"zsh|Zsh" || return "$?"
 
 	if [[ "$USER_SHELL_CHOICE" == "zsh" ]]; then
-		if prompt_yes_no "Installer Oh My Zsh ?" "$([[ "$INSTALL_OH_MY_ZSH" == "yes" ]] && printf 'y' || printf 'n')"; then
-			INSTALL_OH_MY_ZSH="yes"
-			if prompt_yes_no "Installer Powerlevel10k ?" "$([[ "$INSTALL_POWERLEVEL10K" == "yes" ]] && printf 'y' || printf 'n')"; then
-				INSTALL_POWERLEVEL10K="yes"
-			else
-				INSTALL_POWERLEVEL10K="no"
-			fi
+		set_yes_no_var INSTALL_OH_MY_ZSH "Installer Oh My Zsh ?" "$([[ "$INSTALL_OH_MY_ZSH" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
+		if [[ "$INSTALL_OH_MY_ZSH" == "yes" ]]; then
+			set_yes_no_var INSTALL_POWERLEVEL10K "Installer Powerlevel10k ?" "$([[ "$INSTALL_POWERLEVEL10K" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
 		else
-			INSTALL_OH_MY_ZSH="no"
 			INSTALL_POWERLEVEL10K="no"
 		fi
 	else
@@ -924,7 +991,7 @@ configure_user_extras() {
 		INSTALL_POWERLEVEL10K="no"
 	fi
 
-	EXTRA_UTILITY_PACKAGES=$(choose_multi_option "Paquets utiles a installer (liste non exhaustive)" "$EXTRA_UTILITY_PACKAGES" \
+	capture_value EXTRA_UTILITY_PACKAGES choose_multi_option "Paquets utiles a installer (liste non exhaustive)" "$EXTRA_UTILITY_PACKAGES" \
 		"fastfetch|fastfetch - infos systeme stylisees" \
 		"btop|btop - moniteur systeme moderne" \
 		"neovim|neovim - editeur terminal" \
@@ -936,10 +1003,12 @@ configure_user_extras() {
 		"eza|eza - remplacement moderne de ls" \
 		"unzip|unzip - support zip" \
 		"zip|zip - creation d'archives zip" \
-		"reflector|reflector - optimisation des miroirs Arch")
+		"reflector|reflector - optimisation des miroirs Arch" || return "$?"
 }
 
 collect_linux_tkg_options() {
+	local status=0
+
 	section "Linux-tkg"
 
 	if [[ "$KERNEL_MODE" != "repo" ]]; then
@@ -960,20 +1029,24 @@ EOF
 	if prompt_yes_no "Utiliser l'URL officielle du depot linux-tkg ?" "y"; then
 		KERNEL_REPO_URL="https://github.com/Frogging-Family/linux-tkg.git"
 	else
-		KERNEL_REPO_URL=$(prompt_non_empty "URL du depot linux-tkg")
+		status=$?
+		if is_ui_cancel_status "$status"; then
+			return "$status"
+		fi
+		capture_value KERNEL_REPO_URL prompt_non_empty "URL du depot linux-tkg" || return "$?"
 	fi
 }
 
 choose_storage_stack() {
-	local storage_options
+	local storage_options status=0
 
-	section "Stack de stockage"
+	section "Stockage"
 	storage_options=(
-		"standard|Partitions simples"
-		"luks|Racine LUKS"
-		"luks-lvm|LUKS + LVM"
+		"standard|Partitions classiques sans chiffrement"
+		"luks|Racine chiffree avec LUKS"
+		"luks-lvm|LUKS + LVM pour plus de souplesse"
 	)
-	STORAGE_STACK=$(choose_option "Profil de stockage" "$(option_index_for_key "$STORAGE_STACK" "${storage_options[@]}")" "${storage_options[@]}")
+	capture_value STORAGE_STACK choose_option "Choisis le schema de stockage" "$(option_index_for_key "$STORAGE_STACK" "${storage_options[@]}")" "${storage_options[@]}" || return "$?"
 
 	case "$STORAGE_STACK" in
 		standard)
@@ -982,28 +1055,32 @@ choose_storage_stack() {
 			;;
 		luks|luks-lvm)
 			FORMAT_ROOT_CONTAINER="yes"
-			LUKS_NAME=$(prompt_with_default "Nom du mapping LUKS" "$LUKS_NAME")
-			if [[ -n "$LUKS_PASSWORD" ]] && prompt_yes_no "Conserver le mot de passe LUKS deja saisi ?" "y"; then
-				:
+			capture_value LUKS_NAME prompt_with_default "Nom du conteneur LUKS" "$LUKS_NAME" || return "$?"
+			if [[ -n "$LUKS_PASSWORD" ]]; then
+				if prompt_yes_no "Reutiliser le mot de passe LUKS deja saisi ?" "y"; then
+					:
+				else
+					status=$?
+					if is_ui_cancel_status "$status"; then
+						return "$status"
+					fi
+					capture_value LUKS_PASSWORD prompt_password_twice "Mot de passe LUKS" || return "$?"
+				fi
 			else
-				LUKS_PASSWORD=$(prompt_password_twice "Mot de passe LUKS")
+				capture_value LUKS_PASSWORD prompt_password_twice "Mot de passe LUKS" || return "$?"
 			fi
 			if [[ "$STORAGE_STACK" == "luks-lvm" ]]; then
-				LVM_VG_NAME=$(prompt_with_default "Nom du volume group" "$LVM_VG_NAME")
-				LVM_ROOT_NAME=$(prompt_with_default "Nom du logical volume /" "$LVM_ROOT_NAME")
-				if prompt_yes_no "Creer un logical volume /home ?" "$([[ "$LVM_CREATE_HOME" == "yes" ]] && printf 'y' || printf 'n')"; then
-					LVM_CREATE_HOME="yes"
-					ROOT_LV_SIZE_GIB=$(prompt_positive_integer "Taille de / dans le VG (GiB)" "$ROOT_LV_SIZE_GIB")
-					LVM_HOME_NAME=$(prompt_with_default "Nom du logical volume /home" "$LVM_HOME_NAME")
-				else
-					LVM_CREATE_HOME="no"
+				capture_value LVM_VG_NAME prompt_with_default "Nom du groupe de volumes" "$LVM_VG_NAME" || return "$?"
+				capture_value LVM_ROOT_NAME prompt_with_default "Nom du volume logique /" "$LVM_ROOT_NAME" || return "$?"
+				set_yes_no_var LVM_CREATE_HOME "Creer un volume logique /home ?" "$([[ "$LVM_CREATE_HOME" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
+				if [[ "$LVM_CREATE_HOME" == "yes" ]]; then
+					capture_value ROOT_LV_SIZE_GIB prompt_positive_integer "Taille du volume logique / (GiB)" "$ROOT_LV_SIZE_GIB" || return "$?"
+					capture_value LVM_HOME_NAME prompt_with_default "Nom du volume logique /home" "$LVM_HOME_NAME" || return "$?"
 				fi
-				if prompt_yes_no "Creer un logical volume swap ?" "$([[ "$LVM_CREATE_SWAP" == "yes" ]] && printf 'y' || printf 'n')"; then
-					LVM_CREATE_SWAP="yes"
-					LVM_SWAP_SIZE_GIB=$(prompt_positive_integer "Taille du logical volume swap (GiB)" "$LVM_SWAP_SIZE_GIB")
-					LVM_SWAP_NAME=$(prompt_with_default "Nom du logical volume swap" "$LVM_SWAP_NAME")
-				else
-					LVM_CREATE_SWAP="no"
+				set_yes_no_var LVM_CREATE_SWAP "Creer un volume logique swap ?" "$([[ "$LVM_CREATE_SWAP" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
+				if [[ "$LVM_CREATE_SWAP" == "yes" ]]; then
+					capture_value LVM_SWAP_SIZE_GIB prompt_positive_integer "Taille du volume logique swap (GiB)" "$LVM_SWAP_SIZE_GIB" || return "$?"
+					capture_value LVM_SWAP_NAME prompt_with_default "Nom du volume logique swap" "$LVM_SWAP_NAME" || return "$?"
 				fi
 			fi
 			;;
@@ -1019,11 +1096,7 @@ configure_btrfs_layout_if_needed() {
 	fi
 
 	default_answer=$([[ "$USE_BTRFS_SUBVOLUMES" == "yes" ]] && printf 'y' || printf 'n')
-	if prompt_yes_no "Activer le layout btrfs (@, @home, @log, @pkg, @snapshots) ?" "$default_answer"; then
-		USE_BTRFS_SUBVOLUMES="yes"
-	else
-		USE_BTRFS_SUBVOLUMES="no"
-	fi
+	set_yes_no_var USE_BTRFS_SUBVOLUMES "Utiliser le layout btrfs recommande (@, @home, @log, @pkg, @snapshots) ?" "$default_answer"
 }
 
 validate_stack_choices() {
@@ -1081,20 +1154,29 @@ validate_stack_choices() {
 
 auto_partition_disk() {
 	local next_index=1
+	local status=0
 
-	section "Partitionnement automatique"
-	TARGET_DISK=$(select_disk)
+	section "Partitionnement auto"
+	capture_value TARGET_DISK select_disk || return "$?"
 
-	if ! prompt_yes_no "ATTENTION: effacer completement $TARGET_DISK ?" "n"; then
+	if prompt_yes_no "ATTENTION: toutes les donnees sur $TARGET_DISK seront effacees.
+
+Lancer le partitionnement automatique ?" "n"; then
+		:
+	else
+		status=$?
+		if is_ui_cancel_status "$status"; then
+			return "$status"
+		fi
 		die "Partitionnement automatique annule."
 	fi
 
-	ROOT_FS=$(ask_filesystem "Filesystem pour /" 1)
-	configure_btrfs_layout_if_needed
+	capture_value ROOT_FS ask_filesystem "Systeme de fichiers pour la racine /" 1 || return "$?"
+	configure_btrfs_layout_if_needed || return "$?"
 
 	if [[ "$STORAGE_STACK" == "luks-lvm" ]]; then
 		if [[ "$LVM_CREATE_HOME" == "yes" ]]; then
-			HOME_FS=$(ask_filesystem "Filesystem pour /home dans le VG" 1)
+			capture_value HOME_FS ask_filesystem "Systeme de fichiers du volume logique /home" 1 || return "$?"
 			FORMAT_HOME="yes"
 		else
 			HOME_PART=""
@@ -1104,19 +1186,16 @@ auto_partition_disk() {
 		AUTO_CREATE_SWAP="no"
 		SWAP_PART=""
 	else
-		if prompt_yes_no "Creer une partition swap separee ?" "y"; then
-			AUTO_CREATE_SWAP="yes"
-			AUTO_SWAP_SIZE_GIB=$(prompt_positive_integer "Taille de la swap en GiB" "$AUTO_SWAP_SIZE_GIB")
-		else
-			AUTO_CREATE_SWAP="no"
+		set_yes_no_var AUTO_CREATE_SWAP "Creer une partition swap dediee ?" "y" || return "$?"
+		if [[ "$AUTO_CREATE_SWAP" == "yes" ]]; then
+			capture_value AUTO_SWAP_SIZE_GIB prompt_positive_integer "Taille de la partition swap (GiB)" "$AUTO_SWAP_SIZE_GIB" || return "$?"
 		fi
 
-		if prompt_yes_no "Creer une partition /home separee ?" "n"; then
-			AUTO_CREATE_HOME="yes"
-			AUTO_ROOT_SIZE_GIB=$(prompt_positive_integer "Taille de / en GiB" "$AUTO_ROOT_SIZE_GIB")
-			HOME_FS=$(ask_filesystem "Filesystem pour /home" 1)
+		set_yes_no_var AUTO_CREATE_HOME "Creer une partition /home distincte ?" "n" || return "$?"
+		if [[ "$AUTO_CREATE_HOME" == "yes" ]]; then
+			capture_value AUTO_ROOT_SIZE_GIB prompt_positive_integer "Taille de la partition / avant /home (GiB)" "$AUTO_ROOT_SIZE_GIB" || return "$?"
+			capture_value HOME_FS ask_filesystem "Systeme de fichiers pour /home" 1 || return "$?"
 		else
-			AUTO_CREATE_HOME="no"
 			HOME_PART=""
 		fi
 	fi
@@ -1165,74 +1244,84 @@ auto_partition_disk() {
 }
 
 manual_partition_layout() {
+	local status=0
+
 	section "Partitionnement manuel"
 
-	TARGET_DISK=$(select_disk)
+	capture_value TARGET_DISK select_disk || return "$?"
 	if [[ "$PARTITION_MODE" == "cfdisk" ]]; then
 		run_interactive_command cfdisk "$TARGET_DISK"
 	fi
 
-	EFI_PART=$(prompt_partition "Partition EFI")
-	if prompt_yes_no "Formater $EFI_PART en FAT32 ?" "n"; then
-		FORMAT_EFI="yes"
-	else
-		FORMAT_EFI="no"
-	fi
+	capture_value EFI_PART prompt_partition "Partition EFI a utiliser" || return "$?"
+	set_yes_no_var FORMAT_EFI "Reformater $EFI_PART en FAT32 ?" "n" || return "$?"
 
-	ROOT_PART=$(prompt_partition "Partition racine /")
+	capture_value ROOT_PART prompt_partition "Partition racine / a utiliser" || return "$?"
 	case "$STORAGE_STACK" in
 		standard|luks)
 			if [[ "$STORAGE_STACK" == "luks" ]]; then
-				if prompt_yes_no "Initialiser LUKS sur $ROOT_PART ?" "y"; then
-					FORMAT_ROOT_CONTAINER="yes"
-				else
-					FORMAT_ROOT_CONTAINER="no"
-				fi
+				set_yes_no_var FORMAT_ROOT_CONTAINER "Initialiser un conteneur LUKS sur $ROOT_PART ?" "y" || return "$?"
 			fi
 
-			if prompt_yes_no "Formater le filesystem racine ?" "y"; then
+			if prompt_yes_no "Reformater le filesystem de / ?" "y"; then
 				FORMAT_ROOT="yes"
-				ROOT_FS=$(ask_filesystem "Filesystem pour /" 1)
+				capture_value ROOT_FS ask_filesystem "Systeme de fichiers pour la racine /" 1 || return "$?"
 			else
+				status=$?
+				if is_ui_cancel_status "$status"; then
+					return "$status"
+				fi
 				FORMAT_ROOT="no"
 				if [[ "$STORAGE_STACK" == "standard" ]]; then
-					ROOT_FS=$(detect_or_prompt_filesystem "$ROOT_PART" 1)
+					capture_value ROOT_FS detect_or_prompt_filesystem "$ROOT_PART" 1 || return "$?"
 				else
-					ROOT_FS=$(ask_filesystem "Filesystem existant dans le conteneur root" 1)
+					capture_value ROOT_FS ask_filesystem "Systeme de fichiers deja present dans le conteneur LUKS" 1 || return "$?"
 				fi
 			fi
-			configure_btrfs_layout_if_needed
+			configure_btrfs_layout_if_needed || return "$?"
 
-			if prompt_yes_no "Utiliser une partition /home separee ?" "n"; then
-				HOME_PART=$(prompt_partition "Partition /home")
-				if prompt_yes_no "Formater $HOME_PART ?" "n"; then
+			if prompt_yes_no "Utiliser une partition /home distincte ?" "n"; then
+				capture_value HOME_PART prompt_partition "Partition /home a utiliser" || return "$?"
+				if prompt_yes_no "Reformater $HOME_PART ?" "n"; then
 					FORMAT_HOME="yes"
-					HOME_FS=$(ask_filesystem "Filesystem pour /home" 1)
+					capture_value HOME_FS ask_filesystem "Systeme de fichiers pour /home" 1 || return "$?"
 				else
+					status=$?
+					if is_ui_cancel_status "$status"; then
+						return "$status"
+					fi
 					FORMAT_HOME="no"
-					HOME_FS=$(detect_or_prompt_filesystem "$HOME_PART" 1)
+					capture_value HOME_FS detect_or_prompt_filesystem "$HOME_PART" 1 || return "$?"
 				fi
 			else
+				status=$?
+				if is_ui_cancel_status "$status"; then
+					return "$status"
+				fi
 				HOME_PART=""
 				FORMAT_HOME="no"
 			fi
 
-			if prompt_yes_no "Utiliser une partition swap ?" "y"; then
-				SWAP_PART=$(prompt_partition "Partition swap")
+			if prompt_yes_no "Activer une partition swap dediee ?" "y"; then
+				capture_value SWAP_PART prompt_partition "Partition swap a utiliser" || return "$?"
 			else
+				status=$?
+				if is_ui_cancel_status "$status"; then
+					return "$status"
+				fi
 				SWAP_PART=""
 			fi
 			;;
 		luks-lvm)
 			FORMAT_ROOT_CONTAINER="yes"
 			FORMAT_ROOT="yes"
-			ROOT_FS=$(ask_filesystem "Filesystem pour / logique" 1)
-			configure_btrfs_layout_if_needed
+			capture_value ROOT_FS ask_filesystem "Systeme de fichiers du volume logique /" 1 || return "$?"
+			configure_btrfs_layout_if_needed || return "$?"
 			HOME_PART=""
 			SWAP_PART=""
 			if [[ "$LVM_CREATE_HOME" == "yes" ]]; then
 				FORMAT_HOME="yes"
-				HOME_FS=$(ask_filesystem "Filesystem pour /home logique" 1)
+				capture_value HOME_FS ask_filesystem "Systeme de fichiers du volume logique /home" 1 || return "$?"
 			else
 				FORMAT_HOME="no"
 			fi
@@ -1241,19 +1330,19 @@ manual_partition_layout() {
 }
 
 collect_partitioning() {
-	choose_storage_stack
+	choose_storage_stack || return "$?"
 
-	PARTITION_MODE=$(choose_option "Mode de partitionnement" 1 \
-		"manual|Choisir les partitions existantes" \
-		"cfdisk|Lancer cfdisk puis choisir" \
-		"auto|Effacer un disque et creer EFI + root (+ home/swap optionnels)")
+	capture_value PARTITION_MODE choose_option "Comment veux-tu preparer le stockage ?" 1 \
+		"manual|Utiliser des partitions deja creees" \
+		"cfdisk|Ouvrir cfdisk puis choisir les partitions" \
+		"auto|Effacer un disque et creer EFI + / (+ /home et swap optionnels)" || return "$?"
 
 	case "$PARTITION_MODE" in
 		auto)
-			auto_partition_disk
+			auto_partition_disk || return "$?"
 			;;
 		manual|cfdisk)
-			manual_partition_layout
+			manual_partition_layout || return "$?"
 			;;
 	esac
 }
@@ -1317,7 +1406,7 @@ create_btrfs_subvolume_layout() {
 }
 
 prepare_target_filesystems() {
-	section "Preparation des partitions"
+	section "Preparation et montage des partitions"
 	local root_source="$ROOT_PART"
 	local home_source="$HOME_PART"
 	local swap_source="$SWAP_PART"
@@ -1329,7 +1418,7 @@ prepare_target_filesystems() {
 	FINAL_SWAP_DEVICE=""
 
 	if [[ "$FORMAT_EFI" == "yes" ]]; then
-		info "Formatage EFI sur $EFI_PART"
+		info "Formatage de la partition EFI: $EFI_PART"
 		run_logged mkfs.fat -F32 "$EFI_PART"
 	fi
 
@@ -1339,19 +1428,19 @@ prepare_target_filesystems() {
 			;;
 		luks)
 			if [[ "$FORMAT_ROOT_CONTAINER" == "yes" ]]; then
-				info "Initialisation LUKS sur $ROOT_PART"
+				info "Creation du conteneur LUKS sur $ROOT_PART"
 				printf '%s' "$LUKS_PASSWORD" | cryptsetup luksFormat --batch-mode "$ROOT_PART" -
 			fi
-			info "Ouverture du conteneur LUKS $LUKS_NAME"
+			info "Ouverture du conteneur chiffre $LUKS_NAME"
 			open_luks_root
 			root_source="/dev/mapper/$LUKS_NAME"
 			;;
 		luks-lvm)
 			if [[ "$FORMAT_ROOT_CONTAINER" == "yes" ]]; then
-				info "Initialisation LUKS sur $ROOT_PART"
+				info "Creation du conteneur LUKS sur $ROOT_PART"
 				printf '%s' "$LUKS_PASSWORD" | cryptsetup luksFormat --batch-mode "$ROOT_PART" -
 			fi
-			info "Ouverture du conteneur LUKS $LUKS_NAME"
+			info "Ouverture du conteneur chiffre $LUKS_NAME"
 			open_luks_root
 			run_logged pvcreate -ff -y "/dev/mapper/$LUKS_NAME"
 			run_logged vgcreate "$LVM_VG_NAME" "/dev/mapper/$LUKS_NAME"
@@ -1666,13 +1755,17 @@ build_package_lists() {
 			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		i3)
-			append_unique OFFICIAL_PACKAGES i3-wm i3status i3lock dmenu xterm
+			append_unique OFFICIAL_PACKAGES i3-wm i3status i3lock kitty rofi feh picom dunst maim slop xclip brightnessctl playerctl nautilus virt-manager code polkit-gnome
+			[[ "$NETWORK_STACK" == "networkmanager" ]] && append_unique OFFICIAL_PACKAGES network-manager-applet
+			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		icewm)
 			append_unique OFFICIAL_PACKAGES icewm icewm-extra xterm
 			;;
 		sway)
-			append_unique OFFICIAL_PACKAGES sway swaybg swayidle swaylock waybar wofi xdg-desktop-portal-wlr polkit-gnome
+			append_unique OFFICIAL_PACKAGES sway foot swaybg swayidle swaylock waybar wofi mako grim slurp brightnessctl playerctl nautilus virt-manager code elementary-icon-theme xdg-desktop-portal-wlr polkit-gnome
+			[[ "$NETWORK_STACK" == "networkmanager" ]] && append_unique OFFICIAL_PACKAGES network-manager-applet
+			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		labwc)
 			append_unique OFFICIAL_PACKAGES labwc swaybg swayidle swaylock waybar wofi xdg-desktop-portal-wlr polkit-gnome
@@ -1691,84 +1784,305 @@ build_package_lists() {
 	esac
 }
 
+pretty_bool() {
+	case "$1" in
+		yes)
+			printf 'Oui'
+			;;
+		no)
+			printf 'Non'
+			;;
+		*)
+			printf '%s' "$1"
+			;;
+	esac
+}
+
+pretty_label() {
+	local category=$1
+	local value=$2
+
+	case "$category:$value" in
+		cpu:amd)
+			printf 'AMD'
+			;;
+		cpu:intel)
+			printf 'Intel'
+			;;
+		cpu:none)
+			printf 'Aucun'
+			;;
+		gpu:amd)
+			printf 'AMD'
+			;;
+		gpu:intel)
+			printf 'Intel'
+			;;
+		gpu:amd-intel)
+			printf 'AMD + Intel'
+			;;
+		gpu:nvidia)
+			printf 'NVIDIA proprietaire'
+			;;
+		gpu:generic)
+			printf 'Generique / VM'
+			;;
+		gpu:headless)
+			printf 'Sans GPU'
+			;;
+		network:networkmanager)
+			printf 'NetworkManager'
+			;;
+		network:systemd-networkd)
+			printf 'systemd-networkd'
+			;;
+		network:iwd)
+			printf 'iwd'
+			;;
+		network:none)
+			printf 'Manuel'
+			;;
+		audio:pipewire)
+			printf 'PipeWire'
+			;;
+		audio:pulseaudio)
+			printf 'PulseAudio'
+			;;
+		audio:none)
+			printf 'ALSA'
+			;;
+		bootloader:grub)
+			printf 'GRUB'
+			;;
+		bootloader:systemd-boot)
+			printf 'systemd-boot'
+			;;
+		desktop:gnome)
+			printf 'GNOME'
+			;;
+		desktop:kde)
+			printf 'KDE Plasma'
+			;;
+		desktop:xfce)
+			printf 'XFCE'
+			;;
+		desktop:lxqt)
+			printf 'LXQt'
+			;;
+		desktop:hyprland)
+			printf 'Hyprland'
+			;;
+		desktop:i3)
+			printf 'i3'
+			;;
+		desktop:icewm)
+			printf 'IceWM'
+			;;
+		desktop:sway)
+			printf 'Sway'
+			;;
+		desktop:labwc)
+			printf 'Labwc'
+			;;
+		desktop:none)
+			printf 'TTY'
+			;;
+		session:x11)
+			printf 'X11'
+			;;
+		session:wayland)
+			printf 'Wayland'
+			;;
+		session:both)
+			printf 'X11 + Wayland'
+			;;
+		session:tty)
+			printf 'TTY'
+			;;
+		display:none)
+			printf 'Aucun'
+			;;
+		display:gdm)
+			printf 'GDM'
+			;;
+		display:sddm)
+			printf 'SDDM'
+			;;
+		shell:bash)
+			printf 'Bash'
+			;;
+		shell:zsh)
+			printf 'Zsh'
+			;;
+		storage:standard)
+			printf 'Simple'
+			;;
+		storage:luks)
+			printf 'LUKS'
+			;;
+		storage:luks-lvm)
+			printf 'LUKS + LVM'
+			;;
+		kernel-mode:official)
+			printf 'officiel'
+			;;
+		kernel-mode:repo)
+			printf 'depot Git'
+			;;
+		kernel-mode:chaotic)
+			printf 'Chaotic-AUR'
+			;;
+		kernel-mode:aur)
+			printf 'AUR'
+			;;
+		*)
+			printf '%s' "$value"
+			;;
+	esac
+}
+
+short_device_label() {
+	local value=${1:-}
+
+	if [[ -n "$value" ]]; then
+		printf '%s' "${value##*/}"
+	else
+		printf 'a faire'
+	fi
+}
+
+ready_label() {
+	if [[ -n "${1:-}" ]]; then
+		printf 'OK'
+	else
+		printf 'A faire'
+	fi
+}
+
+pair_ready_label() {
+	if [[ -n "${1:-}" && -n "${2:-}" ]]; then
+		printf 'OK'
+	else
+		printf 'A faire'
+	fi
+}
+
+count_selected_items() {
+	local values=${1:-}
+	local -a items=()
+
+	read -r -a items <<< "$values"
+	printf '%s' "${#items[@]}"
+}
+
+describe_identity_status() {
+	printf '%s / %s / secrets %s' "$HOSTNAME" "$USERNAME" "$(pair_ready_label "$ROOT_PASSWORD" "$USER_PASSWORD")"
+}
+
+describe_system_status() {
+	printf '%s / %s / %s' "$(pretty_label bootloader "$BOOTLOADER")" "$KERNEL_PACKAGE" "$(pretty_label desktop "$DESKTOP_CHOICE")"
+}
+
+describe_user_status() {
+	local extra_count
+
+	extra_count=$(count_selected_items "$EXTRA_UTILITY_PACKAGES")
+	if (( extra_count == 0 )); then
+		printf '%s / aucun extra' "$(pretty_label shell "$USER_SHELL_CHOICE")"
+	else
+		printf '%s / %s extra%s' "$(pretty_label shell "$USER_SHELL_CHOICE")" "$extra_count" "$([[ "$extra_count" -gt 1 ]] && printf 's')"
+	fi
+}
+
+describe_storage_status() {
+	printf '%s / root %s' "$(pretty_label storage "$STORAGE_STACK")" "$(short_device_label "$ROOT_PART")"
+}
+
+describe_tkg_status() {
+	if [[ "$KERNEL_MODE" == "repo" ]]; then
+		printf 'Actif'
+	else
+		printf 'Inactif'
+	fi
+}
+
 render_summary() {
 	cat <<EOF
-Hostname            : $HOSTNAME
-Utilisateur         : $USERNAME
-Timezone            : $TIMEZONE
-Locale / keymap     : $LOCALE / $KEYMAP
-CPU / GPU           : $CPU_VENDOR / $GPU_VENDOR
-Bootloader          : $BOOTLOADER
-Kernel              : $KERNEL_PACKAGE ($KERNEL_MODE)
-Audio               : $AUDIO_STACK
-Reseau              : $NETWORK_STACK
-Desktop / Session   : $DESKTOP_CHOICE / $SESSION_STACK
-Display manager     : $DISPLAY_MANAGER
-Multilib            : $ENABLE_MULTILIB
-Avahi / Bluetooth   : $ENABLE_AVAHI / $ENABLE_BLUETOOTH
-OpenSSH             : $ENABLE_OPENSSH
-Shell utilisateur   : $USER_SHELL_CHOICE
-Oh My Zsh / P10K    : $INSTALL_OH_MY_ZSH / $INSTALL_POWERLEVEL10K
-Extras utiles       : ${EXTRA_UTILITY_PACKAGES:-<aucun>}
-os-prober (GRUB)    : $USE_OS_PROBER
-Chaotic-AUR         : $PREPARE_CHAOTIC
+Identite
+Machine        : $HOSTNAME
+Utilisateur    : $USERNAME
+Locale         : $LOCALE / $KEYMAP
+Fuseau         : $TIMEZONE
+Secrets        : root $(ready_label "$ROOT_PASSWORD") / user $(ready_label "$USER_PASSWORD") / luks $(ready_label "$LUKS_PASSWORD")
 
-Stockage            : $STORAGE_STACK
-Subvolumes btrfs    : $USE_BTRFS_SUBVOLUMES
-Disque              : ${TARGET_DISK:-<non choisi>}
-Montage ESP         : $EFI_MOUNT_TARGET
-EFI                 : ${EFI_PART:-<non choisi>} (format: $FORMAT_EFI)
-Root                : ${ROOT_PART:-<non choisi>} ($ROOT_FS, format fs: $FORMAT_ROOT, format conteneur: $FORMAT_ROOT_CONTAINER)
-Home                : ${HOME_PART:-<aucun>} (${HOME_FS:-n/a}, format: $FORMAT_HOME)
-Swap                : ${SWAP_PART:-<aucune>}
-LUKS                : $([[ "$STORAGE_STACK" == "standard" ]] && printf 'non' || printf '%s' "$LUKS_NAME")
-LVM                 : $([[ "$STORAGE_STACK" == "luks-lvm" ]] && printf '%s [%s,%s,%s]' "$LVM_VG_NAME" "$LVM_ROOT_NAME" "$LVM_HOME_NAME" "$LVM_SWAP_NAME" || printf 'non')
-Secrets saisis      : root=$([[ -n "$ROOT_PASSWORD" ]] && printf 'oui' || printf 'non') / user=$([[ -n "$USER_PASSWORD" ]] && printf 'oui' || printf 'non') / luks=$([[ -n "$LUKS_PASSWORD" ]] && printf 'oui' || printf 'non')
+Systeme
+Boot           : $(pretty_label bootloader "$BOOTLOADER")
+Noyau          : $KERNEL_PACKAGE
+Bureau         : $(pretty_label desktop "$DESKTOP_CHOICE") / $(pretty_label session "$SESSION_STACK")
+GPU            : $(pretty_label gpu "$GPU_VENDOR")
+Reseau         : $(pretty_label network "$NETWORK_STACK")
+Audio          : $(pretty_label audio "$AUDIO_STACK")
+Shell          : $(pretty_label shell "$USER_SHELL_CHOICE")
+Extras         : ${EXTRA_UTILITY_PACKAGES:-aucun}
+Options        : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bluetooth $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH")
+Boot extras    : os-prober $(pretty_bool "$USE_OS_PROBER") / chaotic $(pretty_bool "$PREPARE_CHAOTIC")
+Linux-tkg      : $([[ "$KERNEL_MODE" == "repo" ]] && printf 'Actif' || printf 'Inactif')
 
-linux-tkg config    : $([[ "$KERNEL_MODE" == "repo" ]] && printf 'menus upstream interactifs via makepkg -si' || printf 'n/a')
-linux-tkg repo      : $([[ "$KERNEL_MODE" == "repo" ]] && printf '%s' "$KERNEL_REPO_URL" || printf 'n/a')
+Stockage
+Mode           : $(pretty_label storage "$STORAGE_STACK")
+Disque         : ${TARGET_DISK:-<non choisi>}
+EFI            : ${EFI_PART:-<non choisi>} / format $(pretty_bool "$FORMAT_EFI")
+Racine         : ${ROOT_PART:-<non choisi>} / ${ROOT_FS:-n/a}
+Home           : ${HOME_PART:-<aucun>} / ${HOME_FS:-n/a}
+Swap           : ${SWAP_PART:-<aucune>}
+Chiffrement    : $([[ "$STORAGE_STACK" == "standard" ]] && printf 'Non' || printf '%s' "$LUKS_NAME")
+LVM            : $([[ "$STORAGE_STACK" == "luks-lvm" ]] && printf '%s [%s,%s,%s]' "$LVM_VG_NAME" "$LVM_ROOT_NAME" "$LVM_HOME_NAME" "$LVM_SWAP_NAME" || printf 'Non')
+btrfs          : subvolumes $(pretty_bool "$USE_BTRFS_SUBVOLUMES")
 
-Pacstrap            : ${PACSTRAP_PACKAGES[*]}
-Paquets officiels   : ${OFFICIAL_PACKAGES[*]}
-Paquets Chaotic     : ${CHAOTIC_PACKAGES[*]:-<aucun>}
-Paquets AUR         : ${AUR_PACKAGES[*]:-<aucun>}
-Services            : ${SERVICES_TO_ENABLE[*]:-<aucun>}
+Paquets
+Base           : ${#PACSTRAP_PACKAGES[@]}
+Officiels      : ${#OFFICIAL_PACKAGES[@]}
+Chaotic        : ${#CHAOTIC_PACKAGES[@]}
+AUR            : ${#AUR_PACKAGES[@]}
+Services       : ${SERVICES_TO_ENABLE[*]:-<aucun>}
 EOF
 }
 
 render_dashboard_overview() {
 	cat <<EOF
-Menu interactif pret.
-Le controle reseau live est repousse juste avant pacstrap.
+Configuration Arch
 
-Host / user         : $HOSTNAME / $USERNAME
-Locale / keymap     : $LOCALE / $KEYMAP
-Boot / kernel       : $BOOTLOADER / $KERNEL_PACKAGE ($KERNEL_MODE)
-Desktop / DM        : $DESKTOP_CHOICE / $DISPLAY_MANAGER
-Reseau / audio      : $NETWORK_STACK / $AUDIO_STACK
-Shell / extras      : $USER_SHELL_CHOICE / ${EXTRA_UTILITY_PACKAGES:-<aucun>}
-Stockage            : $STORAGE_STACK
-ESP / root          : ${EFI_PART:-<a definir>} / ${ROOT_PART:-<a definir>}
-Chaotic / Mesa      : $PREPARE_CHAOTIC / $MESA_MODE
-Secrets             : root=$([[ -n "$ROOT_PASSWORD" ]] && printf 'oui' || printf 'non') user=$([[ -n "$USER_PASSWORD" ]] && printf 'oui' || printf 'non') luks=$([[ -n "$LUKS_PASSWORD" ]] && printf 'oui' || printf 'non')
+Cancel = retour
+Ctrl+C = quitter
+
+Etat : identite $(pair_ready_label "$ROOT_PASSWORD" "$USER_PASSWORD") / stockage $(ready_label "$ROOT_PART")
 EOF
 }
 
 show_summary() {
-	section "Resume avant execution"
+	local confirm=${1:-yes}
+
+	section "Verification finale"
 	if use_tui; then
 		local summary_file
 		summary_file=$(mktemp "$WORKDIR/summary.XXXXXX")
 		render_summary > "$summary_file"
-		whiptail --backtitle "$SCRIPT_NAME" --title "Resume avant execution" --scrolltext --textbox "$summary_file" 34 110 </dev/tty >/dev/tty 2>/dev/tty
+		whiptail --backtitle "$SCRIPT_NAME" --title "Verification finale" --scrolltext --textbox "$summary_file" 30 100 </dev/tty >/dev/tty 2>/dev/tty
 		rm -f "$summary_file"
 	else
 		render_summary
 	fi
 
-	if ! prompt_yes_no "Lancer l'installation maintenant ?" "n"; then
-		die "Installation annulee avant les operations destructives."
+	[[ "$confirm" == "no" ]] && return 0
+
+	if prompt_yes_no "Confirmer et lancer l'installation ?" "n"; then
+		return 0
 	fi
+	local status=$?
+	if is_ui_cancel_status "$status"; then
+		return "$status"
+	fi
+	return "$UI_CANCEL_STATUS"
 }
 
 save_profile_interactive() {
@@ -1776,7 +2090,7 @@ save_profile_interactive() {
 
 	section "Sauvegarde du profil"
 	mkdir -p "$WORKDIR/profiles"
-	profile_path=$(prompt_with_default "Chemin du profil" "$WORKDIR/profiles/default.conf")
+	capture_value profile_path prompt_with_default "Chemin du profil" "$WORKDIR/profiles/default.conf" || return "$?"
 	: > "$profile_path"
 	write_scalar_vars "$profile_path" \
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR \
@@ -1799,7 +2113,7 @@ load_profile_interactive() {
 	local profile_path
 
 	section "Chargement du profil"
-	profile_path=$(prompt_with_default "Chemin du profil" "$WORKDIR/profiles/default.conf")
+	capture_value profile_path prompt_with_default "Chemin du profil" "$WORKDIR/profiles/default.conf" || return "$?"
 	[[ -f "$profile_path" ]] || die "Profil introuvable: $profile_path"
 
 	# shellcheck disable=SC1090
@@ -1817,17 +2131,17 @@ load_profile_interactive() {
 ensure_ready_for_install() {
 	if [[ -z "$ROOT_PASSWORD" || -z "$USER_PASSWORD" ]]; then
 		warn "Les mots de passe systeme n'ont pas encore ete saisis."
-		collect_identity
+		collect_identity || return "$?"
 	fi
 
 	if [[ "$STORAGE_STACK" != "standard" && -z "$LUKS_PASSWORD" ]]; then
 		warn "Le mot de passe LUKS n'a pas encore ete saisi."
-		choose_storage_stack
+		choose_storage_stack || return "$?"
 	fi
 
 	if [[ -z "$EFI_PART" || -z "$ROOT_PART" ]]; then
 		warn "Le partitionnement n'est pas encore defini."
-		collect_partitioning
+		collect_partitioning || return "$?"
 	fi
 
 	validate_stack_choices
@@ -1836,78 +2150,83 @@ ensure_ready_for_install() {
 }
 
 main_menu_loop() {
-	local menu_options action menu_text
+	local menu_options action action_status menu_text
 
 	while true; do
 		if use_tui; then
 			menu_text=$(render_dashboard_overview)
-			action=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Configuration Arch Linux" --default-item "identity" --menu "$menu_text" 24 110 14 \
-				"identity" "Identite, locale, timezone, mots de passe" \
-				"stack" "Bootloader, kernel, reseau, audio, desktop, Mesa" \
-				"extras" "Shell utilisateur, fastfetch, utilitaires" \
-				"storage" "Disques, partitions, LUKS/LVM, btrfs" \
-				"live-network" "Tester / configurer le reseau du live ISO" \
-				"tkg" "linux-tkg via menus upstream" \
-				"save" "Sauvegarder le profil courant" \
-				"load" "Charger un profil existant" \
-				"review" "Afficher le resume complet" \
-				"install" "Lancer l'installation" \
-				"quit" "Quitter") || action="quit"
+			action=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Configuration Arch" --default-item "Identite" --menu "$menu_text" 24 100 14 \
+				"Identite" "$(describe_identity_status)" \
+				"Systeme" "$(describe_system_status)" \
+				"Utilisateur" "$(describe_user_status)" \
+				"Stockage" "$(describe_storage_status)" \
+				"Reseau" "Connexion du live ISO" \
+				"Linux-tkg" "$(describe_tkg_status)" \
+				"Sauver" "Enregistrer un profil" \
+				"Charger" "Charger un profil" \
+				"Resume" "Verifier avant installation" \
+				"Installer" "Demarrer l'installation" \
+				"Quitter" "Fermer l'installateur") || action="Quitter"
 		else
 			section "Menu principal"
-			printf 'Etat rapide: host=%s, kernel=%s, stockage=%s, desktop=%s\n' "$HOSTNAME" "$KERNEL_PACKAGE" "$STORAGE_STACK" "$DESKTOP_CHOICE"
+			printf 'Etat: identite=%s, systeme=%s, stockage=%s\n' "$(pair_ready_label "$ROOT_PASSWORD" "$USER_PASSWORD")" "$KERNEL_PACKAGE" "$(ready_label "$ROOT_PART")"
 			menu_options=(
-				"identity|Identite systeme"
-				"stack|Stack systeme"
-				"extras|Shell utilisateur / utilitaires"
-				"storage|Stockage / partitionnement"
-				"live-network|Reseau live ISO"
-				"tkg|Options linux-tkg"
-				"save|Sauvegarder un profil"
-				"load|Charger un profil"
-				"review|Afficher le resume"
-				"install|Lancer l'installation"
-				"quit|Quitter"
+				"Identite|$(describe_identity_status)"
+				"Systeme|$(describe_system_status)"
+				"Utilisateur|$(describe_user_status)"
+				"Stockage|$(describe_storage_status)"
+				"Reseau|Connexion du live ISO"
+				"Linux-tkg|$(describe_tkg_status)"
+				"Sauver|Enregistrer un profil"
+				"Charger|Charger un profil"
+				"Resume|Verifier avant installation"
+				"Installer|Demarrer l'installation"
+				"Quitter|Fermer l'installateur"
 			)
-			action=$(choose_option "Que veux-tu configurer ?" 1 "${menu_options[@]}")
+			action=$(choose_option "Choisis une section" 1 "${menu_options[@]}")
 		fi
 
 		case "$action" in
-			identity)
-				collect_identity
+			Identite)
+				run_menu_action collect_identity
 				;;
-			stack)
-				collect_system_stack
+			Systeme)
+				run_menu_action collect_system_stack
 				;;
-			extras)
-				configure_user_extras
+			Utilisateur)
+				run_menu_action configure_user_extras
 				;;
-			storage)
-				collect_partitioning
+			Stockage)
+				run_menu_action collect_partitioning
 				;;
-			live-network)
-				configure_live_network
+			Reseau)
+				run_menu_action configure_live_network
 				;;
-			tkg)
-				collect_linux_tkg_options
+			Linux-tkg)
+				run_menu_action collect_linux_tkg_options
 				;;
-			save)
-				save_profile_interactive
+			Sauver)
+				run_menu_action save_profile_interactive
 				;;
-			load)
-				load_profile_interactive
+			Charger)
+				run_menu_action load_profile_interactive
 				;;
-			review)
+			Resume)
 				validate_stack_choices
 				build_package_lists
-				section "Resume"
-				render_summary
+				run_menu_action show_summary "no"
 				;;
-			install)
-				ensure_ready_for_install
-				return 0
+			Installer)
+				if ensure_ready_for_install; then
+					return 0
+				fi
+				action_status=$?
+				if is_ui_cancel_status "$action_status"; then
+					continue
+				fi
+				return "$action_status"
 				;;
-			quit)
+			Quitter)
 				exit 0
 				;;
 		esac
@@ -1915,7 +2234,7 @@ main_menu_loop() {
 }
 
 run_pacstrap() {
-	section "Pacstrap"
+	section "Installation de la base systeme"
 	info "Mode debug verbeux actif. Log live: $LOG_FILE"
 	configure_live_network noninteractive
 	run_logged timedatectl set-ntp true || true
@@ -1941,7 +2260,7 @@ write_target_config() {
 		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES \
 		USE_OS_PROBER PREPARE_CHAOTIC \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
-		FORMAT_ROOT_CONTAINER LUKS_NAME LUKS_PASSWORD LVM_VG_NAME LVM_ROOT_NAME \
+		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
 		LVM_SWAP_SIZE_GIB TARGET_DISK PARTITION_MODE EFI_PART ROOT_PART HOME_PART \
 		SWAP_PART FORMAT_EFI FORMAT_ROOT FORMAT_HOME ROOT_FS HOME_FS AUTO_CREATE_HOME \
@@ -2012,7 +2331,18 @@ handle_error() {
 	exit "$exit_code"
 }
 
+handle_interrupt() {
+	local signal_name=${1:-INT}
+
+	trap - ERR INT TERM
+	printf '\n[WARN] Interruption recue dans le chroot (%s). Installation stoppee.\n' "$signal_name" >&2
+	printf '[WARN] Log chroot: %s\n' "$CHROOT_LOG_FILE" >&2
+	exit 130
+}
+
 trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_interrupt INT' INT
+trap 'handle_interrupt TERM' TERM
 
 contains_word() {
 	local needle=$1
@@ -2237,6 +2567,19 @@ create_accounts() {
 %wheel ALL=(ALL:ALL) ALL
 SUDOERS
 	chmod 440 /etc/sudoers.d/10-wheel
+
+	# Créer les répertoires XDG standards (Images, Documents, Téléchargements…)
+	# GNOME/KDE le font via PAM au premier login ; les WM minimalistes ne le font pas.
+	if command -v xdg-user-dirs-update >/dev/null 2>&1; then
+		run_logged runuser -u "$USERNAME" -- xdg-user-dirs-update
+	else
+		# Fallback : créer les dossiers classiques manuellement
+		local user_home="/home/$USERNAME"
+		local dir
+		for dir in Desktop Documents Downloads Music Pictures Videos Templates Public; do
+			install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/$dir"
+		done
+	fi
 }
 
 write_fastfetch_config() {
@@ -2301,6 +2644,29 @@ write_shell_setup() {
 	local user_home="/home/$USERNAME"
 	local zsh_theme="robbyrussell"
 	local user_shell_path
+	local fastfetch_line=""
+
+	if selection_string_contains "$EXTRA_UTILITY_PACKAGES" "fastfetch"; then
+		fastfetch_line='[[ $- == *i* ]] && command -v fastfetch &>/dev/null && fastfetch'
+	fi
+
+	# .bashrc — toujours écrit, shell bash ou zsh
+	cat > "$user_home/.bashrc" <<EOFBASH
+# ~/.bashrc
+
+[[ \$- != *i* ]] && return
+
+alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
+alias grep='grep --color=auto'
+
+export HISTSIZE=5000
+export HISTFILESIZE=10000
+export HISTCONTROL=ignoredups:erasedups
+
+${fastfetch_line}
+EOFBASH
+	chown "$USERNAME:$USERNAME" "$user_home/.bashrc"
 
 	if [[ "$USER_SHELL_CHOICE" != "zsh" ]]; then
 		return 0
@@ -2329,9 +2695,11 @@ plugins=(git)
 
 source "\$ZSH/oh-my-zsh.sh"
 [[ -f "\$HOME/.p10k.zsh" ]] && source "\$HOME/.p10k.zsh"
+
+${fastfetch_line}
 EOFZSH
 	else
-		cat > "$user_home/.zshrc" <<'EOFZSH'
+		cat > "$user_home/.zshrc" <<EOFZSH
 autoload -Uz compinit
 compinit
 
@@ -2340,6 +2708,10 @@ HISTSIZE=5000
 SAVEHIST=5000
 
 alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
+alias grep='grep --color=auto'
+
+${fastfetch_line}
 EOFZSH
 	fi
 
@@ -2350,7 +2722,7 @@ write_foot_config() {
 	local user_home="/home/$USERNAME"
 	local foot_config="$user_home/.config/foot/foot.ini"
 
-	if [[ "$DESKTOP_CHOICE" != "hyprland" ]]; then
+	if [[ "$DESKTOP_CHOICE" != "hyprland" && "$DESKTOP_CHOICE" != "sway" ]]; then
 		return 0
 	fi
 
@@ -2498,13 +2870,7 @@ write_hyprland_dotfiles() {
 
 	cat > "$hypr_config" <<'EOFHYPR'
 # ----------------- Monitor -----------------
-monitorv2 {
-  output = eDP-1
-  mode = 2560x1600@165
-  position = 0x0
-  scale = 1.6666
- #transform = 2
-}
+monitor = eDP-1, 2560x1600@165, 0x0, 1.6666
 
 # ----------------- Startup -----------------
 exec-once = sh -c '[ -f "$HOME/Images/wallpaper6.jpg" ] && exec swaybg -i "$HOME/Images/wallpaper6.jpg" -m fill'
@@ -2520,7 +2886,6 @@ EOFHYPR
 	fi
 
 	cat >> "$hypr_config" <<'EOFHYPR'
-exec-once = XDG_MENU_PREFIX=arch- kbuildsycoca6
 exec-once = mako
 
 # ----------------- Environment -----------------
@@ -2688,7 +3053,7 @@ bind = $mainMod, D, exec, rofi -show drun
 bind = $mainMod, E, exec, nautilus
 bind = $mainMod, V, exec, virt-manager
 bind = $mainMod, C, exec, code
-bind = $mainMod, L, exec, swaylock -c 000000
+bind = $mainMod, Escape, exec, swaylock -c 000000
 
 bind = $mainMod, Q, killactive,
 bind = $mainMod, F, fullscreen, 1
@@ -2794,12 +3159,509 @@ EOFHYPR
 	chown "$USERNAME:$USERNAME" "$hypr_config"
 }
 
+write_sway_dotfiles() {
+	local user_home="/home/$USERNAME"
+	local sway_config="$user_home/.config/sway/config"
+
+	if [[ "$DESKTOP_CHOICE" != "sway" ]]; then
+		return 0
+	fi
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" \
+		"$user_home/.config/sway" \
+		"$user_home/Images"
+
+	cat > "$sway_config" <<'EOFSWAY'
+set $mod Mod4
+
+output eDP-1 mode 2560x1600@165Hz pos 0 0 scale 1.6666
+
+floating_modifier $mod normal
+default_border pixel 1
+gaps inner 5
+gaps outer 20
+focus_follows_mouse yes
+
+exec_always --no-startup-id sh -c '[ -f "$HOME/Images/wallpaper6.jpg" ] && exec swaybg -i "$HOME/Images/wallpaper6.jpg" -m fill'
+exec_always --no-startup-id waybar
+exec --no-startup-id mako
+exec --no-startup-id /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+EOFSWAY
+
+	if [[ "$ENABLE_BLUETOOTH" == "yes" ]]; then
+		printf 'exec --no-startup-id blueman-applet\n' >> "$sway_config"
+	fi
+
+	if [[ "$NETWORK_STACK" == "networkmanager" ]]; then
+		printf 'exec --no-startup-id nm-applet\n' >> "$sway_config"
+	fi
+
+	cat >> "$sway_config" <<'EOFSWAY'
+
+seat * xcursor_theme elementary 60
+
+input type:keyboard {
+	xkb_layout fr
+	repeat_delay 300
+	repeat_rate 50
+}
+
+input type:touchpad {
+	natural_scroll enabled
+	tap enabled
+	dwt enabled
+	scroll_factor 1.0
+}
+
+set $term foot
+set $menu wofi --show drun
+
+bindsym $mod+Return exec $term
+bindsym $mod+d exec $menu
+bindsym $mod+e exec nautilus
+bindsym $mod+v exec virt-manager
+bindsym $mod+c exec code
+bindsym $mod+Escape exec swaylock -c 000000
+
+bindsym $mod+q kill
+bindsym $mod+f fullscreen toggle
+bindsym $mod+Shift+f fullscreen disable
+bindsym $mod+p floating toggle
+bindsym $mod+t layout toggle split
+bindsym $mod+s exec grim -g "$(slurp)" - | tee ~/Images/screenshot-$(date +%Y-%m-%d-%H%M%S).png | wl-copy
+
+bindsym $mod+Left focus left
+bindsym $mod+Right focus right
+bindsym $mod+Up focus up
+bindsym $mod+Down focus down
+bindsym $mod+h focus left
+bindsym $mod+l focus right
+bindsym $mod+k focus up
+bindsym $mod+j focus down
+
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Right move right
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+l move right
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+j move down
+
+mode "resize" {
+	bindsym Right resize grow width 10 px
+	bindsym Left resize shrink width 10 px
+	bindsym Up resize shrink height 10 px
+	bindsym Down resize grow height 10 px
+	bindsym l resize grow width 10 px
+	bindsym h resize shrink width 10 px
+	bindsym k resize shrink height 10 px
+	bindsym j resize grow height 10 px
+	bindsym Escape mode "default"
+	bindsym Return mode "default"
+}
+bindsym $mod+r mode "resize"
+
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+
+bindsym $mod+Ctrl+Left workspace prev_on_output
+bindsym $mod+Ctrl+Right workspace next_on_output
+bindsym $mod+Ctrl+Up workspace prev_on_output
+bindsym $mod+Ctrl+Down workspace next_on_output
+
+bindsym $mod+Ctrl+Shift+Left move container to workspace prev_on_output
+bindsym $mod+Ctrl+Shift+Right move container to workspace next_on_output
+
+bindsym $mod+grave scratchpad show
+bindsym $mod+Shift+grave move scratchpad
+
+bindsym --whole-window $mod+button4 workspace prev_on_output
+bindsym --whole-window $mod+button5 workspace next_on_output
+
+bindsym XF86MonBrightnessUp exec brightnessctl -e set +5%
+bindsym XF86MonBrightnessDown exec brightnessctl -e set 5%-
+bindsym XF86AudioRaiseVolume exec pactl set-sink-volume @DEFAULT_SINK@ +5%
+bindsym XF86AudioLowerVolume exec pactl set-sink-volume @DEFAULT_SINK@ -5%
+bindsym XF86AudioMute exec pactl set-sink-mute @DEFAULT_SINK@ toggle
+bindsym XF86AudioMicMute exec pactl set-source-mute @DEFAULT_SOURCE@ toggle
+bindsym XF86AudioPlay exec playerctl play-pause
+bindsym XF86AudioPause exec playerctl pause
+bindsym XF86AudioNext exec playerctl next
+bindsym XF86AudioPrev exec playerctl previous
+
+bindsym Mod1+Tab focus next
+bindsym Mod1+Shift+Tab focus prev
+
+bindsym $mod+Shift+r reload
+bindsym $mod+Shift+q exec swaymsg exit
+EOFSWAY
+
+	chown "$USERNAME:$USERNAME" "$sway_config"
+}
+
+write_waybar_config() {
+	local user_home="/home/$USERNAME"
+	local waybar_dir="$user_home/.config/waybar"
+	local wm_module
+
+	if [[ "$DESKTOP_CHOICE" == "hyprland" ]]; then
+		wm_module="hyprland/workspaces"
+	elif [[ "$DESKTOP_CHOICE" == "sway" ]]; then
+		wm_module="sway/workspaces"
+	else
+		return 0
+	fi
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$waybar_dir"
+
+	cat > "$waybar_dir/config" <<EOFWAYBAR
+{
+    "layer": "top",
+    "position": "top",
+    "height": 28,
+    "spacing": 6,
+    "modules-left": ["${wm_module}", "custom/sep"],
+    "modules-center": ["clock"],
+    "modules-right": ["pulseaudio", "network", "cpu", "memory", "battery", "tray"],
+
+    "${wm_module}": {
+        "format": "{icon}",
+        "format-icons": {
+            "active": "",
+            "default": ""
+        },
+        "persistent-workspaces": {}
+    },
+
+    "custom/sep": {
+        "format": "|",
+        "tooltip": false
+    },
+
+    "clock": {
+        "format": "{:%d/%m  %H:%M}",
+        "tooltip-format": "<tt>{calendar}</tt>"
+    },
+
+    "cpu": {
+        "format": "CPU {usage}%",
+        "interval": 2
+    },
+
+    "memory": {
+        "format": "RAM {used:.1f}G",
+        "interval": 5
+    },
+
+    "battery": {
+        "format": "BAT {capacity}%",
+        "format-charging": "+ {capacity}%",
+        "format-full": "= 100%",
+        "states": {
+            "warning": 20,
+            "critical": 10
+        }
+    },
+
+    "network": {
+        "format-wifi": "W: {signalStrength}%",
+        "format-ethernet": "E: {ipaddr}",
+        "format-disconnected": "offline"
+    },
+
+    "pulseaudio": {
+        "format": "VOL {volume}%",
+        "format-muted": "MUTE",
+        "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+    },
+
+    "tray": {
+        "spacing": 8
+    }
+}
+EOFWAYBAR
+
+	cat > "$waybar_dir/style.css" <<'EOFCSS'
+* {
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 12px;
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+}
+
+window#waybar {
+    background-color: rgba(10, 10, 10, 0.85);
+    color: #cdd6f4;
+}
+
+#workspaces button {
+    padding: 0 6px;
+    color: #6c7086;
+}
+
+#workspaces button.active,
+#workspaces button.focused {
+    color: #cdd6f4;
+}
+
+#clock,
+#cpu,
+#memory,
+#battery,
+#network,
+#pulseaudio,
+#tray,
+#custom-sep {
+    padding: 0 8px;
+    color: #cdd6f4;
+}
+
+#battery.warning { color: #f9e2af; }
+#battery.critical { color: #f38ba8; }
+EOFCSS
+
+	chown -R "$USERNAME:$USERNAME" "$waybar_dir"
+}
+
+write_i3status_config() {
+	local user_home="/home/$USERNAME"
+	local i3status_config="$user_home/.config/i3status/config"
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_home/.config/i3status"
+
+	cat > "$i3status_config" <<'EOFI3S'
+general {
+	colors = true
+	interval = 2
+	color_good     = "#98c379"
+	color_bad      = "#e06c75"
+	color_degraded = "#e5c07b"
+}
+
+order += "wireless _first_"
+order += "ethernet _first_"
+order += "battery all"
+order += "cpu_usage"
+order += "memory"
+order += "tztime local"
+
+wireless _first_ {
+	format_up   = "W: %quality %essid %ip"
+	format_down = "W: -"
+}
+
+ethernet _first_ {
+	format_up   = "E: %ip"
+	format_down = "E: -"
+}
+
+battery all {
+	format                = "BAT: %status %percentage %remaining"
+	format_down           = ""
+	last_full_capacity    = true
+	integer_battery_capacity = true
+	low_threshold         = 15
+	threshold_type        = percentage
+	status_chr  = "+"
+	status_bat  = ""
+	status_unk  = "?"
+	status_full = "="
+}
+
+cpu_usage {
+	format        = "CPU: %usage"
+	max_threshold = 90
+}
+
+memory {
+	format             = "RAM: %used"
+	threshold_degraded = "1G"
+	threshold_critical = "200M"
+}
+
+tztime local {
+	format = "%d/%m %H:%M"
+}
+EOFI3S
+
+	chown "$USERNAME:$USERNAME" "$i3status_config"
+}
+
+write_i3_dotfiles() {
+	local user_home="/home/$USERNAME"
+	local i3_config="$user_home/.config/i3/config"
+
+	if [[ "$DESKTOP_CHOICE" != "i3" ]]; then
+		return 0
+	fi
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" \
+		"$user_home/.config/i3" \
+		"$user_home/Images"
+
+	cat > "$i3_config" <<'EOFI3'
+set $mod Mod4
+font pango:DejaVu Sans Mono 10
+
+floating_modifier $mod
+default_border pixel 1
+gaps inner 5
+gaps outer 20
+focus_follows_mouse yes
+
+exec_always --no-startup-id sh -c '[ -f "$HOME/Images/wallpaper6.jpg" ] && exec feh --bg-fill "$HOME/Images/wallpaper6.jpg"'
+exec_always --no-startup-id picom
+exec --no-startup-id dunst
+exec --no-startup-id /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+EOFI3
+
+	if [[ "$ENABLE_BLUETOOTH" == "yes" ]]; then
+		printf 'exec --no-startup-id blueman-applet\n' >> "$i3_config"
+	fi
+
+	if [[ "$NETWORK_STACK" == "networkmanager" ]]; then
+		printf 'exec --no-startup-id nm-applet\n' >> "$i3_config"
+	fi
+
+	cat >> "$i3_config" <<'EOFI3'
+
+set $term kitty
+set $menu rofi -show drun
+
+bindsym $mod+Return exec $term
+bindsym $mod+d exec $menu
+bindsym $mod+e exec nautilus
+bindsym $mod+v exec virt-manager
+bindsym $mod+c exec code
+bindsym $mod+Escape exec i3lock -c 000000
+
+bindsym $mod+q kill
+bindsym $mod+f fullscreen toggle
+bindsym $mod+Shift+f fullscreen disable
+bindsym $mod+p floating toggle
+bindsym $mod+t layout toggle split
+bindsym $mod+s exec maim -s | tee ~/Images/screenshot-$(date +%Y-%m-%d-%H%M%S).png | xclip -selection clipboard -t image/png
+
+bindsym $mod+Left focus left
+bindsym $mod+Right focus right
+bindsym $mod+Up focus up
+bindsym $mod+Down focus down
+bindsym $mod+h focus left
+bindsym $mod+l focus right
+bindsym $mod+k focus up
+bindsym $mod+j focus down
+
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Right move right
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+l move right
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+j move down
+
+mode "resize" {
+	bindsym Right resize grow width 10 px or 10 ppt
+	bindsym Left resize shrink width 10 px or 10 ppt
+	bindsym Up resize shrink height 10 px or 10 ppt
+	bindsym Down resize grow height 10 px or 10 ppt
+	bindsym l resize grow width 10 px or 10 ppt
+	bindsym h resize shrink width 10 px or 10 ppt
+	bindsym k resize shrink height 10 px or 10 ppt
+	bindsym j resize grow height 10 px or 10 ppt
+	bindsym Escape mode "default"
+	bindsym Return mode "default"
+}
+bindsym $mod+r mode "resize"
+
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+
+bindsym $mod+Ctrl+Left workspace prev
+bindsym $mod+Ctrl+Right workspace next
+bindsym $mod+Ctrl+Up workspace prev
+bindsym $mod+Ctrl+Down workspace next
+
+bindsym $mod+Ctrl+Shift+Left move container to workspace prev
+bindsym $mod+Ctrl+Shift+Right move container to workspace next
+
+bindsym $mod+grave scratchpad show
+bindsym $mod+Shift+grave move scratchpad
+
+bindsym --whole-window $mod+button4 workspace prev
+bindsym --whole-window $mod+button5 workspace next
+
+bindsym XF86MonBrightnessUp exec brightnessctl -e set +5%
+bindsym XF86MonBrightnessDown exec brightnessctl -e set 5%-
+bindsym XF86AudioRaiseVolume exec pactl set-sink-volume @DEFAULT_SINK@ +5%
+bindsym XF86AudioLowerVolume exec pactl set-sink-volume @DEFAULT_SINK@ -5%
+bindsym XF86AudioMute exec pactl set-sink-mute @DEFAULT_SINK@ toggle
+bindsym XF86AudioMicMute exec pactl set-source-mute @DEFAULT_SOURCE@ toggle
+bindsym XF86AudioPlay exec playerctl play-pause
+bindsym XF86AudioPause exec playerctl pause
+bindsym XF86AudioNext exec playerctl next
+bindsym XF86AudioPrev exec playerctl previous
+
+bindsym Mod1+Tab focus next
+bindsym Mod1+Shift+Tab focus prev
+
+bindsym $mod+Shift+r reload
+bindsym $mod+Shift+q exec i3-msg exit
+
+bar {
+	status_command i3status
+}
+EOFI3
+
+	chown "$USERNAME:$USERNAME" "$i3_config"
+	write_i3status_config
+}
+
 write_user_customizations() {
 	section "Personnalisation utilisateur"
 	write_fastfetch_config
 	write_shell_setup
 	write_foot_config
+	write_waybar_config
 	write_hyprland_dotfiles
+	write_sway_dotfiles
+	write_i3_dotfiles
 }
 
 sync_and_install_packages() {
@@ -3026,6 +3888,13 @@ XINIT
 		if [[ "$DESKTOP_CHOICE" == "hyprland" ]]; then
 			printf '\nDotfile Hyprland: ~/.config/hypr/hyprland.conf\n'
 			printf 'Config Foot: ~/.config/foot/foot.ini\n'
+			printf 'Fond d''ecran attendu: ~/Images/wallpaper6.jpg\n'
+		elif [[ "$DESKTOP_CHOICE" == "sway" ]]; then
+			printf '\nConfig Sway: ~/.config/sway/config\n'
+			printf 'Config Foot: ~/.config/foot/foot.ini\n'
+			printf 'Fond d''ecran attendu: ~/Images/wallpaper6.jpg\n'
+		elif [[ "$DESKTOP_CHOICE" == "i3" ]]; then
+			printf '\nConfig i3: ~/.config/i3/config\n'
 			printf 'Fond d''ecran attendu: ~/Images/wallpaper6.jpg\n'
 		fi
 	} > "$notes_file"
