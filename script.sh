@@ -4066,7 +4066,7 @@ install_gns3_server_if_needed() {
 	user_gns3server="$user_local_bin/gns3server"
 
 	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_local_bin"
-	run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; pip install --user --upgrade gns3server'
+	run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; python -m pip install --user --upgrade --break-system-packages gns3-server'
 	[[ -x "$user_gns3server" ]] || die "Le binaire gns3server n'a pas ete installe dans $user_gns3server"
 	run_logged ln -sfn "$user_gns3server" /usr/bin/gns3server
 }
@@ -4354,7 +4354,7 @@ ZPROFILE
 		fi
 		if [[ "$INSTALL_GNS3" == "yes" ]]; then
 			printf '\nGNS3 installe: services docker/libvirtd actives au boot.\n'
-			printf 'gns3server est installe via pip dans ~/.local/bin puis lie vers /usr/bin/gns3server.\n'
+			printf 'gns3server est installe via python -m pip (gns3-server) dans ~/.local/bin puis lie vers /usr/bin/gns3server.\n'
 			printf 'Le reseau libvirt par defaut sera prepare automatiquement au premier demarrage.\n'
 			printf 'Une reconnexion ou un reboot est recommande pour appliquer les groupes docker/wireshark/kvm/libvirt.\n'
 		fi

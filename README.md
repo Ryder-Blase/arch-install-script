@@ -79,7 +79,7 @@ Display managers : `GDM`, `SDDM`, `LightDM`, ou aucun (TTY).
 |--------|--------|
 | Chaotic-AUR | dépôt avec paquets précompilés (mesa-tkg, linux-cachyos…) |
 | Suite QEMU/libvirt | `qemu-full`, `libvirt`, `virt-manager`, `dnsmasq`, OVMF, SWTPM — utilisateur ajouté au groupe `libvirt` |
-| GNS3 | `gns3-gui`, `dynamips`, `ubridge`, `vpcs` via AUR + `gns3server` via `python-pip` (`pip --user`) + `docker`, `wireshark-qt`, `qemu-full`, `libvirt`, `tigervnc`, `inetutils` — groupes, lien `/usr/bin/gns3server` et services configurés |
+| GNS3 | `gns3-gui`, `dynamips`, `ubridge`, `vpcs` via AUR + `gns3-server` via `python-pip` (`python -m pip --user --break-system-packages`) + `docker`, `wireshark-qt`, `qemu-full`, `libvirt`, `tigervnc`, `inetutils` — groupes, lien `/usr/bin/gns3server` et services configurés |
 | Autologin TTY1 | override systemd getty |
 | Autostart WM | `.bash_profile` / `.zprofile` avec garde TTY1 |
 | Multilib | activation automatique du dépôt 32 bits |
