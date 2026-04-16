@@ -49,6 +49,7 @@ INSTALL_POWERLEVEL10K="no"
 EXTRA_UTILITY_PACKAGES="fastfetch"
 EXTRA_APP_PACKAGES=""
 INSTALL_VIRT_SUITE="no"
+INSTALL_GNS3="no"
 GAMING_TWEAKS="no"
 USE_OS_PROBER="yes"
 PREPARE_CHAOTIC="no"
@@ -1042,6 +1043,7 @@ configure_user_extras() {
 		"mangohud|MangoHud - overlay performances en jeu" || return "$?"
 
 	set_yes_no_var INSTALL_VIRT_SUITE "Installer la suite QEMU + libvirt + virt-manager ?" "n" || return "$?"
+	set_yes_no_var INSTALL_GNS3 "Installer GNS3 (GUI, serveur, dynamips, ubridge, docker, Wireshark, VPCS) ?" "n" || return "$?"
 
 	# Auto-suggere si des paquets gaming sont selectionnes
 	local gaming_default="n"
@@ -1710,6 +1712,12 @@ build_package_lists() {
 		fi
 	fi
 
+	if [[ "$INSTALL_GNS3" == "yes" ]]; then
+		append_unique OFFICIAL_PACKAGES docker wireshark-qt qemu-full libvirt dnsmasq iptables-nft gperftools tigervnc inetutils
+		append_unique AUR_PACKAGES gns3-server gns3-gui dynamips ubridge vpcs
+		append_unique SERVICES_TO_ENABLE docker libvirtd virtlogd
+	fi
+
 	if [[ "$INSTALL_VIRT_SUITE" == "yes" ]]; then
 		append_unique OFFICIAL_PACKAGES qemu-full libvirt virt-manager virt-viewer dnsmasq iptables-nft edk2-ovmf swtpm
 		append_unique SERVICES_TO_ENABLE libvirtd virtlogd
@@ -2095,6 +2103,7 @@ Audio          : $(pretty_label audio "$AUDIO_STACK")
 Shell          : $(pretty_label shell "$USER_SHELL_CHOICE")
 Extras         : ${EXTRA_UTILITY_PACKAGES:-aucun}
 Options        : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bluetooth $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH")
+Virtualisation : suite $(pretty_bool "$INSTALL_VIRT_SUITE") / gns3 $(pretty_bool "$INSTALL_GNS3")
 Boot extras    : os-prober $(pretty_bool "$USE_OS_PROBER") / chaotic $(pretty_bool "$PREPARE_CHAOTIC")
 Linux-tkg      : $([[ "$KERNEL_MODE" == "repo" ]] && printf 'Actif' || printf 'Inactif')
 
@@ -2197,7 +2206,7 @@ save_profile_interactive() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
 		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE GAMING_TWEAKS USE_OS_PROBER \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS USE_OS_PROBER \
 		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -2358,7 +2367,7 @@ write_target_config() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
 		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE GAMING_TWEAKS \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS \
 		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
@@ -2475,6 +2484,26 @@ join_quoted() {
 
 ensure_user_build_dir() {
 	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "/home/$USERNAME/builds"
+}
+
+append_user_to_existing_groups() {
+	local group group_list
+	local -a groups_to_add=()
+
+	for group in "$@"; do
+		if getent group "$group" >/dev/null 2>&1; then
+			groups_to_add+=("$group")
+		else
+			warn "Groupe absent, ajout ignore: $group"
+		fi
+	done
+
+	if ((${#groups_to_add[@]} == 0)); then
+		return 0
+	fi
+
+	group_list=$(IFS=,; printf '%s' "${groups_to_add[*]}")
+	run_logged usermod -aG "$group_list" "$USERNAME"
 }
 
 enable_temp_build_sudo() {
@@ -4009,26 +4038,20 @@ sync_and_install_packages() {
 	fi
 }
 
-install_paru_if_needed() {
+install_yay_if_needed() {
 	local aur_cmd
 
 	if ((${#AUR_PACKAGES[@]} == 0)); then
 		return 0
 	fi
 
-	if ! command -v paru >/dev/null 2>&1; then
-		if grep -Eq '^\[chaotic-aur\]' /etc/pacman.conf; then
-			run_logged pacman -S --noconfirm --needed paru-bin || true
-		fi
-	fi
-
-	if ! command -v paru >/dev/null 2>&1; then
+	if ! command -v yay >/dev/null 2>&1; then
 		ensure_user_build_dir
-		run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; cd ~/builds; rm -rf paru; git clone https://aur.archlinux.org/paru.git; cd paru; makepkg -si --noconfirm --needed'
+		run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; sudo pacman -S --noconfirm --needed git base-devel; cd ~/builds; rm -rf yay-bin; git clone https://aur.archlinux.org/yay-bin.git; cd yay-bin; makepkg -si --noconfirm --needed'
 	fi
 
 	aur_cmd=$(join_quoted "${AUR_PACKAGES[@]}")
-	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; paru -S --noconfirm --needed --skipreview $aur_cmd"
+	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; yay -S --noconfirm --needed --answerclean None --answerdiff None $aur_cmd"
 }
 
 install_repo_kernel_if_needed() {
@@ -4064,6 +4087,51 @@ enable_services() {
 	if pacman -Q dbus-broker >/dev/null 2>&1; then
 		run_logged systemctl enable dbus-broker.service || true
 	fi
+}
+
+configure_gns3_libvirt_network() {
+	if [[ "$INSTALL_GNS3" != "yes" ]]; then
+		return 0
+	fi
+
+	install -d -m 0755 /usr/local/lib/arch-installer
+	cat > /usr/local/lib/arch-installer/gns3-libvirt-network.sh <<'SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if ! command -v virsh >/dev/null 2>&1; then
+	exit 0
+fi
+
+if ! virsh net-info default >/dev/null 2>&1; then
+	if [[ -f /usr/share/libvirt/networks/default.xml ]]; then
+		virsh net-define /usr/share/libvirt/networks/default.xml || true
+	elif [[ -f /etc/libvirt/qemu/networks/default.xml ]]; then
+		virsh net-define /etc/libvirt/qemu/networks/default.xml || true
+	fi
+fi
+
+virsh net-autostart default || true
+virsh net-start default || true
+SCRIPT
+	chmod 755 /usr/local/lib/arch-installer/gns3-libvirt-network.sh
+
+	cat > /etc/systemd/system/gns3-libvirt-network.service <<'UNIT'
+[Unit]
+Description=Prepare libvirt default network for GNS3
+After=libvirtd.service network-online.target
+Wants=network-online.target
+Requires=libvirtd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/arch-installer/gns3-libvirt-network.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+	run_logged systemctl enable gns3-libvirt-network.service
 }
 
 configure_grub() {
@@ -4267,6 +4335,11 @@ ZPROFILE
 			printf '\nConfig i3: ~/.config/i3/config\n'
 			printf 'Fond d''ecran attendu: ~/Images/wallpaper6.jpg\n'
 		fi
+		if [[ "$INSTALL_GNS3" == "yes" ]]; then
+			printf '\nGNS3 installe: services docker/libvirtd actives au boot.\n'
+			printf 'Le reseau libvirt par defaut sera prepare automatiquement au premier demarrage.\n'
+			printf 'Une reconnexion ou un reboot est recommande pour appliquer les groupes docker/wireshark/kvm/libvirt.\n'
+		fi
 	} > "$notes_file"
 }
 
@@ -4292,13 +4365,17 @@ main() {
 	configure_network_files
 	sync_and_install_packages
 	enable_temp_build_sudo
-	install_paru_if_needed
+	install_yay_if_needed
 	install_repo_kernel_if_needed
 	configure_mkinitcpio
 	run_logged mkinitcpio -P || true
 	configure_bootloader
 	enable_services
-	[[ "$INSTALL_VIRT_SUITE" == "yes" ]] && run_logged usermod -aG libvirt "$USERNAME"
+	configure_gns3_libvirt_network
+	local -a installer_groups=()
+	[[ "$INSTALL_VIRT_SUITE" == "yes" ]] && installer_groups+=(libvirt)
+	[[ "$INSTALL_GNS3" == "yes" ]] && installer_groups+=(docker wireshark kvm libvirt)
+	append_user_to_existing_groups "${installer_groups[@]}"
 	write_user_customizations
 	write_session_helpers
 	cleanup_sensitive_files
