@@ -4055,17 +4055,19 @@ install_yay_if_needed() {
 }
 
 install_gns3_server_if_needed() {
-	local user_local_bin user_gns3server
+	local user_local_dir user_local_bin user_gns3server
 
 	if [[ "$INSTALL_GNS3" != "yes" ]]; then
 		return 0
 	fi
 
 	section "Installation de gns3server via pip"
+	user_local_dir="/home/$USERNAME/.local"
 	user_local_bin="/home/$USERNAME/.local/bin"
 	user_gns3server="$user_local_bin/gns3server"
 
-	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_local_bin"
+	install -d -m 0755 "$user_local_dir" "$user_local_bin" "$user_local_dir/lib"
+	run_logged chown -R "$USERNAME:$USERNAME" "$user_local_dir"
 	run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; python -m pip install --user --upgrade --break-system-packages gns3-server'
 	[[ -x "$user_gns3server" ]] || die "Le binaire gns3server n'a pas ete installe dans $user_gns3server"
 	run_logged ln -sfn "$user_gns3server" /usr/bin/gns3server
