@@ -1713,8 +1713,8 @@ build_package_lists() {
 	fi
 
 	if [[ "$INSTALL_GNS3" == "yes" ]]; then
-		append_unique OFFICIAL_PACKAGES docker wireshark-qt qemu-full libvirt dnsmasq iptables-nft gperftools tigervnc inetutils
-		append_unique AUR_PACKAGES gns3-server gns3-gui dynamips ubridge vpcs
+		append_unique OFFICIAL_PACKAGES docker wireshark-qt qemu-full libvirt dnsmasq iptables-nft gperftools tigervnc inetutils python-pip
+		append_unique AUR_PACKAGES gns3-gui dynamips ubridge vpcs
 		append_unique SERVICES_TO_ENABLE docker libvirtd virtlogd
 	fi
 
@@ -4054,6 +4054,23 @@ install_yay_if_needed() {
 	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; yay -S --noconfirm --needed --answerclean None --answerdiff None $aur_cmd"
 }
 
+install_gns3_server_if_needed() {
+	local user_local_bin user_gns3server
+
+	if [[ "$INSTALL_GNS3" != "yes" ]]; then
+		return 0
+	fi
+
+	section "Installation de gns3server via pip"
+	user_local_bin="/home/$USERNAME/.local/bin"
+	user_gns3server="$user_local_bin/gns3server"
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_local_bin"
+	run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; pip install --user --upgrade gns3server'
+	[[ -x "$user_gns3server" ]] || die "Le binaire gns3server n'a pas ete installe dans $user_gns3server"
+	run_logged ln -sfn "$user_gns3server" /usr/bin/gns3server
+}
+
 install_repo_kernel_if_needed() {
 	local repo_url_quoted repo_name detected_pkgbase
 
@@ -4337,6 +4354,7 @@ ZPROFILE
 		fi
 		if [[ "$INSTALL_GNS3" == "yes" ]]; then
 			printf '\nGNS3 installe: services docker/libvirtd actives au boot.\n'
+			printf 'gns3server est installe via pip dans ~/.local/bin puis lie vers /usr/bin/gns3server.\n'
 			printf 'Le reseau libvirt par defaut sera prepare automatiquement au premier demarrage.\n'
 			printf 'Une reconnexion ou un reboot est recommande pour appliquer les groupes docker/wireshark/kvm/libvirt.\n'
 		fi
@@ -4366,6 +4384,7 @@ main() {
 	sync_and_install_packages
 	enable_temp_build_sudo
 	install_yay_if_needed
+	install_gns3_server_if_needed
 	install_repo_kernel_if_needed
 	configure_mkinitcpio
 	run_logged mkinitcpio -P || true
