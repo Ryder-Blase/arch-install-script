@@ -763,6 +763,14 @@ run_logged() {
 	"$@"
 }
 
+# Exécute une commande dans un pseudo-terminal (pty) via script(1).
+# Pacman/pacstrap détectent si stdout est un tty ; sans pty ils désactivent
+# les barres de progression et bufferisent la sortie.
+run_pty() {
+	log_command "$@"
+	script -qefc "$(printf '%q ' "$@")" /dev/null
+}
+
 handle_error() {
 	local exit_code=$1
 	local line_no=$2
@@ -3237,8 +3245,8 @@ run_pacstrap() {
 	info "Mode debug verbeux actif. Log live: $LOG_FILE"
 	configure_live_network noninteractive
 	run_logged timedatectl set-ntp true || true
-	run_logged pacman -Sy --noconfirm archlinux-keyring
-	run_logged pacstrap -K "$TARGET_MOUNT" "${PACSTRAP_PACKAGES[@]}"
+	run_pty pacman -Sy --noconfirm archlinux-keyring
+	run_pty pacstrap -K "$TARGET_MOUNT" "${PACSTRAP_PACKAGES[@]}"
 }
 
 generate_fstab() {
@@ -3316,6 +3324,11 @@ log_command() {
 run_logged() {
 	log_command "$@"
 	"$@"
+}
+
+run_pty() {
+	log_command "$@"
+	script -qefc "$(printf '%q ' "$@")" /dev/null
 }
 
 handle_error() {
@@ -3590,8 +3603,8 @@ enable_chaotic_repo() {
 
 	run_logged pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
 	run_logged pacman-key --lsign-key 3056513887B78AEB
-	run_logged pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst'
-	run_logged pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
+	run_pty pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst'
+	run_pty pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
 	printf '\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist\n' >> /etc/pacman.conf
 }
 
@@ -5052,14 +5065,14 @@ write_user_customizations() {
 
 sync_and_install_packages() {
 	section "PAQUETS"
-	run_logged pacman -Syu --noconfirm
+	run_pty pacman -Syu --noconfirm
 
 	if ((${#CHAOTIC_PACKAGES[@]})); then
-		run_logged pacman -S --noconfirm --needed "${CHAOTIC_PACKAGES[@]}"
+		run_pty pacman -S --noconfirm --needed "${CHAOTIC_PACKAGES[@]}"
 	fi
 
 	if ((${#OFFICIAL_PACKAGES[@]})); then
-		run_logged pacman -S --noconfirm --needed "${OFFICIAL_PACKAGES[@]}"
+		run_pty pacman -S --noconfirm --needed "${OFFICIAL_PACKAGES[@]}"
 	fi
 }
 
@@ -5072,11 +5085,11 @@ install_yay_if_needed() {
 
 	if ! command -v yay >/dev/null 2>&1; then
 		ensure_user_build_dir
-		run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; sudo pacman -S --noconfirm --needed git base-devel; cd ~/builds; rm -rf yay-bin; git clone https://aur.archlinux.org/yay-bin.git; cd yay-bin; makepkg -si --noconfirm --needed'
+		run_pty runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail; sudo pacman -S --noconfirm --needed git base-devel; cd ~/builds; rm -rf yay-bin; git clone https://aur.archlinux.org/yay-bin.git; cd yay-bin; makepkg -si --noconfirm --needed'
 	fi
 
 	aur_cmd=$(join_quoted "${AUR_PACKAGES[@]}")
-	run_logged runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; yay -S --noconfirm --needed --answerclean None --answerdiff None $aur_cmd"
+	run_pty runuser -u "$USERNAME" -- bash -lc "set -euo pipefail; yay -S --noconfirm --needed --answerclean None --answerdiff None $aur_cmd"
 }
 
 install_gns3_server_if_needed() {
