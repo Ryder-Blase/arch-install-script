@@ -2754,7 +2754,7 @@ configure_zram() {
 	run_logged install -d -m 0755 /etc/systemd
 	cat > /etc/systemd/zram-generator.conf <<ZRAMCONF
 [zram0]
-zram-size = min(ram, ${zram_size_mib})
+zram-size = min(${zram_size_mib})
 compression-algorithm = zstd
 swap-priority = 100
 ZRAMCONF
