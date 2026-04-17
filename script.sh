@@ -819,8 +819,26 @@ collect_identity() {
 	local status=0
 
 	section "Identite"
-	capture_value HOSTNAME prompt_with_default "Hostname" "$HOSTNAME" || return "$?"
-	capture_value USERNAME prompt_with_default "Utilisateur principal" "$USERNAME" || return "$?"
+
+	while true; do
+		capture_value HOSTNAME prompt_with_default "Hostname" "$HOSTNAME" || return "$?"
+		if [[ "$HOSTNAME" =~ ^[a-z][a-z0-9-]{0,62}$ ]]; then
+			break
+		fi
+		show_message "Hostname invalide" "Le hostname doit commencer par une lettre minuscule et ne contenir que a-z, 0-9, - (max 63 caracteres)."
+	done
+
+	while true; do
+		capture_value USERNAME prompt_with_default "Utilisateur principal" "$USERNAME" || return "$?"
+		if [[ "$USERNAME" == "root" ]]; then
+			show_message "Nom invalide" "Le nom d'utilisateur ne peut pas etre root."
+			continue
+		fi
+		if [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+			break
+		fi
+		show_message "Nom invalide" "Le nom d'utilisateur doit commencer par a-z ou _, ne contenir que a-z, 0-9, _, - (max 32 caracteres)."
+	done
 	capture_value TIMEZONE prompt_with_default "Timezone" "$TIMEZONE" || return "$?"
 	capture_value LOCALE prompt_with_default "Locale" "$LOCALE" || return "$?"
 	capture_value KEYMAP prompt_with_default "Keymap console" "$KEYMAP" || return "$?"
@@ -1876,7 +1894,7 @@ build_package_lists() {
 			[[ "$ENABLE_BLUETOOTH" == "yes" ]] && append_unique OFFICIAL_PACKAGES blueman
 			;;
 		icewm)
-			append_unique OFFICIAL_PACKAGES icewm icewm-extra xtermsetxkbmap fr-latin9
+			append_unique OFFICIAL_PACKAGES icewm xterm xorg-setxkbmap
 			;;
 		sway)
 			append_unique OFFICIAL_PACKAGES sway foot swaybg swayidle swaylock waybar wofi mako grim slurp brightnessctl playerctl thunar virt-manager code elementary-icon-theme xdg-desktop-portal-wlr polkit-gnome
@@ -2888,13 +2906,13 @@ IWD
 create_accounts() {
 	section "Utilisateurs"
 
-	echo "root:$ROOT_PASSWORD" | chpasswd
+	chpasswd <<< "root:$ROOT_PASSWORD"
 
 	if ! id "$USERNAME" >/dev/null 2>&1; then
 		useradd -m -G wheel,audio,video,storage,optical,input -s /bin/bash "$USERNAME"
 	fi
 
-	echo "$USERNAME:$USER_PASSWORD" | chpasswd
+	chpasswd <<< "$USERNAME:$USER_PASSWORD"
 
 	cat > /etc/sudoers.d/10-wheel <<'SUDOERS'
 %wheel ALL=(ALL:ALL) ALL
@@ -3222,7 +3240,7 @@ write_hyprland_dotfiles() {
 
 	cat > "$hypr_config" <<'EOFHYPR'
 # ----------------- Monitor -----------------
-monitor = eDP-1, 2560x1600@165, 0x0, 1.6666
+monitor = , preferred, auto, 1
 
 # ----------------- Startup -----------------
 exec-once = sh -c '[ -f "$HOME/Images/wallpaper6.jpg" ] && exec swaybg -i "$HOME/Images/wallpaper6.jpg" -m fill'
@@ -3526,7 +3544,7 @@ write_sway_dotfiles() {
 	cat > "$sway_config" <<'EOFSWAY'
 set $mod Mod4
 
-output eDP-1 mode 2560x1600@165Hz pos 0 0 scale 1.6666
+output * mode preferred
 
 floating_modifier $mod normal
 default_border pixel 1
