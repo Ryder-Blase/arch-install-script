@@ -4206,7 +4206,6 @@ vm.dirty_bytes = 268435456
 vm.dirty_writeback_centisecs = 1500
 vm.page-cluster = 0
 vm.compaction_proactiveness = 0
-vm.transparent_hugepage = madvise
 kernel.nmi_watchdog = 0
 kernel.unprivileged_userns_clone = 1
 kernel.kptr_restrict = 1
