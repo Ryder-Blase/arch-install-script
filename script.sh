@@ -2620,7 +2620,7 @@ build_package_lists() {
 
 	case "$DESKTOP_CHOICE" in
 		gnome)
-			append_unique OFFICIAL_PACKAGES gnome gnome-tweaks
+			append_unique OFFICIAL_PACKAGES gnome gnome-tweaks gnome-themes-extra gnome-browser-connector
 			;;
 		kde)
 			append_unique OFFICIAL_PACKAGES plasma-meta konsole dolphin kate ark spectacle
