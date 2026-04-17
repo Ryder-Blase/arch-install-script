@@ -42,6 +42,11 @@ ENABLE_MULTILIB="yes"
 ENABLE_AVAHI="yes"
 ENABLE_BLUETOOTH="yes"
 ENABLE_OPENSSH="no"
+ENABLE_CUPS="no"
+ENABLE_SWAPFILE="no"
+SWAPFILE_SIZE_GIB="4"
+ENABLE_ZRAM="no"
+ZRAM_SIZE_GIB="4"
 INSTALL_PICOM="no"
 USER_SHELL_CHOICE="bash"
 INSTALL_OH_MY_ZSH="no"
@@ -401,6 +406,24 @@ prompt_positive_integer() {
 			warn "Merci de saisir un entier strictement positif."
 		fi
 	done
+}
+
+configure_memory_features() {
+	local swapfile_default zram_default
+
+	section "Memoire"
+
+	swapfile_default=$([[ "$ENABLE_SWAPFILE" == "yes" ]] && printf 'y' || printf 'n')
+	set_yes_no_var ENABLE_SWAPFILE "Creer un fichier swap persistant sur le systeme cible ?" "$swapfile_default" || return "$?"
+	if [[ "$ENABLE_SWAPFILE" == "yes" ]]; then
+		capture_value SWAPFILE_SIZE_GIB prompt_positive_integer "Taille du fichier swap (GiB)" "$SWAPFILE_SIZE_GIB" || return "$?"
+	fi
+
+	zram_default=$([[ "$ENABLE_ZRAM" == "yes" ]] && printf 'y' || printf 'n')
+	set_yes_no_var ENABLE_ZRAM "Activer zram au demarrage ?" "$zram_default" || return "$?"
+	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
+		capture_value ZRAM_SIZE_GIB prompt_positive_integer "Taille de zram (GiB)" "$ZRAM_SIZE_GIB" || return "$?"
+	fi
 }
 
 prompt_password_twice() {
@@ -978,6 +1001,7 @@ collect_system_stack() {
 	set_yes_no_var ENABLE_AVAHI "Activer Avahi pour la decouverte locale (mDNS / .local) ?" "y" || return "$?"
 	set_yes_no_var ENABLE_BLUETOOTH "Activer Bluetooth au demarrage ?" "y" || return "$?"
 	set_yes_no_var ENABLE_OPENSSH "Installer et activer OpenSSH ?" "n" || return "$?"
+	set_yes_no_var ENABLE_CUPS "Installer et activer CUPS au demarrage ?" "$([[ "$ENABLE_CUPS" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
 
 	configure_user_extras || return "$?"
 }
@@ -1200,6 +1224,9 @@ validate_stack_choices() {
 	if [[ "$GPU_VENDOR" == "nvidia" && "$KERNEL_HEADERS_PACKAGE" == "" ]]; then
 		die "NVIDIA DKMS requiert un package headers."
 	fi
+
+	[[ "$SWAPFILE_SIZE_GIB" =~ ^[0-9]+$ ]] && (( SWAPFILE_SIZE_GIB > 0 )) || die "La taille du fichier swap doit etre un entier strictement positif."
+	[[ "$ZRAM_SIZE_GIB" =~ ^[0-9]+$ ]] && (( ZRAM_SIZE_GIB > 0 )) || die "La taille de zram doit etre un entier strictement positif."
 }
 
 auto_partition_disk() {
@@ -1395,6 +1422,8 @@ collect_partitioning() {
 			manual_partition_layout || return "$?"
 			;;
 	esac
+
+	configure_memory_features || return "$?"
 }
 
 format_partition() {
@@ -1689,6 +1718,15 @@ build_package_lists() {
 	if [[ "$ENABLE_OPENSSH" == "yes" ]]; then
 		append_unique OFFICIAL_PACKAGES openssh
 		append_unique SERVICES_TO_ENABLE sshd
+	fi
+
+	if [[ "$ENABLE_CUPS" == "yes" ]]; then
+		append_unique OFFICIAL_PACKAGES cups
+		append_unique SERVICES_TO_ENABLE cups.service
+	fi
+
+	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
+		append_unique OFFICIAL_PACKAGES zram-generator
 	fi
 
 	if [[ "$USER_SHELL_CHOICE" == "zsh" ]]; then
@@ -2073,7 +2111,20 @@ describe_user_status() {
 }
 
 describe_storage_status() {
-	printf '%s / root %s' "$(pretty_label storage "$STORAGE_STACK")" "$(short_device_label "$ROOT_PART")"
+	local memory_parts=()
+
+	if [[ "$ENABLE_SWAPFILE" == "yes" ]]; then
+		memory_parts+=("swapfile ${SWAPFILE_SIZE_GIB}G")
+	fi
+	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
+		memory_parts+=("zram ${ZRAM_SIZE_GIB}G")
+	fi
+
+	if ((${#memory_parts[@]})); then
+		printf '%s / root %s / %s' "$(pretty_label storage "$STORAGE_STACK")" "$(short_device_label "$ROOT_PART")" "$(IFS=', '; printf '%s' "${memory_parts[*]}")"
+	else
+		printf '%s / root %s' "$(pretty_label storage "$STORAGE_STACK")" "$(short_device_label "$ROOT_PART")"
+	fi
 }
 
 describe_tkg_status() {
@@ -2102,7 +2153,7 @@ Reseau         : $(pretty_label network "$NETWORK_STACK")
 Audio          : $(pretty_label audio "$AUDIO_STACK")
 Shell          : $(pretty_label shell "$USER_SHELL_CHOICE")
 Extras         : ${EXTRA_UTILITY_PACKAGES:-aucun}
-Options        : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bluetooth $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH")
+Options        : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bluetooth $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH") / cups $(pretty_bool "$ENABLE_CUPS")
 Virtualisation : suite $(pretty_bool "$INSTALL_VIRT_SUITE") / gns3 $(pretty_bool "$INSTALL_GNS3")
 Boot extras    : os-prober $(pretty_bool "$USE_OS_PROBER") / chaotic $(pretty_bool "$PREPARE_CHAOTIC")
 Linux-tkg      : $([[ "$KERNEL_MODE" == "repo" ]] && printf 'Actif' || printf 'Inactif')
@@ -2114,6 +2165,8 @@ EFI            : ${EFI_PART:-<non choisi>} / format $(pretty_bool "$FORMAT_EFI")
 Racine         : ${ROOT_PART:-<non choisi>} / ${ROOT_FS:-n/a}
 Home           : ${HOME_PART:-<aucun>} / ${HOME_FS:-n/a}
 Swap           : ${SWAP_PART:-<aucune>}
+Swapfile       : $([[ "$ENABLE_SWAPFILE" == "yes" ]] && printf '%s GiB' "$SWAPFILE_SIZE_GIB" || printf 'Non')
+Zram           : $([[ "$ENABLE_ZRAM" == "yes" ]] && printf '%s GiB' "$ZRAM_SIZE_GIB" || printf 'Non')
 Chiffrement    : $([[ "$STORAGE_STACK" == "standard" ]] && printf 'Non' || printf '%s' "$LUKS_NAME")
 LVM            : $([[ "$STORAGE_STACK" == "luks-lvm" ]] && printf '%s [%s,%s,%s]' "$LVM_VG_NAME" "$LVM_ROOT_NAME" "$LVM_HOME_NAME" "$LVM_SWAP_NAME" || printf 'Non')
 btrfs          : subvolumes $(pretty_bool "$USE_BTRFS_SUBVOLUMES")
@@ -2205,7 +2258,7 @@ save_profile_interactive() {
 	write_scalar_vars "$profile_path" \
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
-		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
+		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS USER_SHELL_CHOICE \
 		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS USE_OS_PROBER \
 		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
@@ -2213,7 +2266,8 @@ save_profile_interactive() {
 		LVM_SWAP_SIZE_GIB KERNEL_MODE KERNEL_PACKAGE KERNEL_HEADERS_PACKAGE MESA_MODE \
 		CUSTOM_MESA_PACKAGE CUSTOM_MESA_LIB32_PACKAGE TARGET_DISK PARTITION_MODE EFI_PART \
 		ROOT_PART HOME_PART SWAP_PART FORMAT_EFI FORMAT_ROOT FORMAT_HOME ROOT_FS HOME_FS \
-		AUTO_CREATE_HOME AUTO_CREATE_SWAP AUTO_SWAP_SIZE_GIB AUTO_ROOT_SIZE_GIB
+		AUTO_CREATE_HOME AUTO_CREATE_SWAP AUTO_SWAP_SIZE_GIB AUTO_ROOT_SIZE_GIB \
+		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM ZRAM_SIZE_GIB
 	chmod 600 "$profile_path"
 	info "Profil enregistre dans $profile_path"
 	warn "Les mots de passe ne sont pas sauvegardes dans les profils."
@@ -2366,7 +2420,7 @@ write_target_config() {
 	write_scalar_vars "$ARCH_CONFIG_PATH" \
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
-		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH USER_SHELL_CHOICE \
+		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS USER_SHELL_CHOICE \
 		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS \
 		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
@@ -2377,7 +2431,7 @@ write_target_config() {
 		AUTO_CREATE_SWAP AUTO_SWAP_SIZE_GIB AUTO_ROOT_SIZE_GIB FINAL_ROOT_DEVICE \
 		FINAL_HOME_DEVICE FINAL_SWAP_DEVICE KERNEL_MODE KERNEL_PACKAGE \
 		KERNEL_HEADERS_PACKAGE MESA_MODE CUSTOM_MESA_PACKAGE CUSTOM_MESA_LIB32_PACKAGE \
-		ROOT_PASSWORD USER_PASSWORD
+		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM ZRAM_SIZE_GIB ROOT_PASSWORD USER_PASSWORD
 	declare -p OFFICIAL_PACKAGES CHAOTIC_PACKAGES AUR_PACKAGES SERVICES_TO_ENABLE >> "$ARCH_CONFIG_PATH"
 
 	chmod 600 "$ARCH_CONFIG_PATH"
@@ -2577,6 +2631,55 @@ build_kernel_cmdline() {
 	fi
 
 	printf '%s rw\n' "$cmdline"
+}
+
+ensure_fstab_swap_entry() {
+	local entry=$1
+
+	if grep -Fqx "$entry" /etc/fstab; then
+		return 0
+	fi
+
+	printf '%s\n' "$entry" >> /etc/fstab
+}
+
+configure_persistent_swapfile() {
+	local swapfile_dir="/swap"
+	local swapfile_path="$swapfile_dir/swapfile"
+	local swapfile_size="${SWAPFILE_SIZE_GIB}G"
+
+	if [[ "$ENABLE_SWAPFILE" != "yes" ]]; then
+		return 0
+	fi
+
+	section "Swapfile"
+	run_logged install -d -m 0700 "$swapfile_dir"
+	rm -f "$swapfile_path"
+
+	if [[ "$ROOT_FS" == "btrfs" ]]; then
+		run_logged btrfs filesystem mkswapfile --size "$swapfile_size" "$swapfile_path"
+	else
+		run_logged fallocate -l "$swapfile_size" "$swapfile_path"
+		run_logged chmod 600 "$swapfile_path"
+		run_logged mkswap "$swapfile_path"
+	fi
+
+	ensure_fstab_swap_entry "$swapfile_path none swap defaults 0 0"
+}
+
+configure_zram() {
+	if [[ "$ENABLE_ZRAM" != "yes" ]]; then
+		return 0
+	fi
+
+	section "zram"
+	run_logged install -d -m 0755 /etc/systemd
+	cat > /etc/systemd/zram-generator.conf <<ZRAMCONF
+[zram0]
+zram-size = ${ZRAM_SIZE_GIB}G
+compression-algorithm = zstd
+swap-priority = 100
+ZRAMCONF
 }
 
 configure_mkinitcpio() {
@@ -4388,6 +4491,8 @@ main() {
 	install_yay_if_needed
 	install_gns3_server_if_needed
 	install_repo_kernel_if_needed
+	configure_persistent_swapfile
+	configure_zram
 	configure_mkinitcpio
 	run_logged mkinitcpio -P || true
 	configure_bootloader

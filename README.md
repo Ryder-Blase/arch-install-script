@@ -27,6 +27,7 @@ chmod +x script.sh
 | btrfs | avec sous-volumes (`@`, `@home`, `@snapshots`) |
 
 Partitionnement : manuel, `cfdisk` interactif, ou automatique.  
+Mémoire : partition swap, **swapfile persistant**, et **zram** avec taille configurable.  
 Bootloaders supportés : `GRUB`, `systemd-boot`.
 
 ### Noyau
@@ -85,7 +86,9 @@ Display managers : `GDM`, `SDDM`, `LightDM`, ou aucun (TTY).
 | Multilib | activation automatique du dépôt 32 bits |
 | Bluetooth | `bluez`, `bluez-utils`, blueman |
 | Avahi | mDNS / découverte réseau locale |
+| CUPS | serveur d'impression installé et activé au démarrage |
 | OpenSSH | serveur SSH activé |
+| Swapfile / zram | création d'un fichier swap persistant dans `fstab` et génération d'une config `zram-generator` |
 | os-prober | détection multi-boot |
 | picom | compositeur X11 optionnel (transparence, ombres) |
 
