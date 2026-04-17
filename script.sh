@@ -1085,6 +1085,7 @@ configure_user_extras() {
 
 	# Auto-suggere si des paquets gaming sont selectionnes
 	local gaming_default="n"
+	local _pkg
 	for _pkg in steam lutris gamemode wine mangohud; do
 		if [[ " $EXTRA_APP_PACKAGES " == *" $_pkg "* ]]; then
 			gaming_default="y"
@@ -1239,7 +1240,14 @@ validate_stack_choices() {
 		die "NVIDIA DKMS requiert un package headers."
 	fi
 
-	[[ "$SWAPFILE_SIZE_GIB" =~ ^[0-9]+$ ]] && (( SWAPFILE_SIZE_GIB > 0 )) || die "La taille du fichier swap doit etre un entier strictement positif."
+	if [[ "$ENABLE_SWAPFILE" == "yes" ]]; then
+		[[ "$SWAPFILE_SIZE_GIB" =~ ^[0-9]+$ ]] && (( SWAPFILE_SIZE_GIB > 0 )) || die "La taille du fichier swap doit etre un entier strictement positif."
+	fi
+
+	if [[ "$ENABLE_MULTILIB" != "yes" ]] && selection_string_contains "$EXTRA_APP_PACKAGES" "steam"; then
+		warn "Steam necessite le depot multilib. Activation automatique de multilib."
+		ENABLE_MULTILIB="yes"
+	fi
 }
 
 auto_partition_disk() {
@@ -1536,9 +1544,6 @@ prepare_target_filesystems() {
 			open_luks_root
 			run_logged pvcreate -ff -y "/dev/mapper/$LUKS_NAME"
 			run_logged vgcreate "$LVM_VG_NAME" "/dev/mapper/$LUKS_NAME"
-			if [[ "$LVM_CREATE_HOME" == "yes" ]]; then
-				run_logged lvcreate -L "${ROOT_LV_SIZE_GIB}G" -n "$LVM_ROOT_NAME" "$LVM_VG_NAME"
-			fi
 			if [[ "$LVM_CREATE_SWAP" == "yes" ]]; then
 				run_logged lvcreate -L "${LVM_SWAP_SIZE_GIB}G" -n "$LVM_SWAP_NAME" "$LVM_VG_NAME"
 				swap_source="/dev/$LVM_VG_NAME/$LVM_SWAP_NAME"
@@ -1546,6 +1551,7 @@ prepare_target_filesystems() {
 				swap_source=""
 			fi
 			if [[ "$LVM_CREATE_HOME" == "yes" ]]; then
+				run_logged lvcreate -L "${ROOT_LV_SIZE_GIB}G" -n "$LVM_ROOT_NAME" "$LVM_VG_NAME"
 				run_logged lvcreate -l 100%FREE -n "$LVM_HOME_NAME" "$LVM_VG_NAME"
 				home_source="/dev/$LVM_VG_NAME/$LVM_HOME_NAME"
 			else
