@@ -1991,7 +1991,7 @@ auto_partition_disk() {
 	local next_index=1
 	local status=0
 
-	section "${T[sec_auto_part]}"
+	section "${T[sec_part_auto]}"
 	capture_value TARGET_DISK select_disk || return "$?"
 
 	if prompt_yes_no "$(printf "${T[auto_wipe_warn]}" "$TARGET_DISK")" "n"; then
@@ -2079,7 +2079,7 @@ auto_partition_disk() {
 manual_partition_layout() {
 	local status=0
 
-	section "${T[sec_manual_part]}"
+	section "${T[sec_part_manual]}"
 
 	capture_value TARGET_DISK select_disk || return "$?"
 	if [[ "$PARTITION_MODE" == "cfdisk" ]]; then
