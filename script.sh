@@ -1600,6 +1600,7 @@ build_package_lists() {
 		efibootmgr
 		dosfstools
 		mtools
+		libdisplay-info
 		xdg-user-dirs
 		xdg-utils
 		noto-fonts
@@ -1727,6 +1728,10 @@ build_package_lists() {
 
 	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
 		append_unique OFFICIAL_PACKAGES zram-generator
+	fi
+
+	if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
+		append_unique OFFICIAL_PACKAGES lib32-libdisplay-info
 	fi
 
 	if [[ "$USER_SHELL_CHOICE" == "zsh" ]]; then
@@ -4191,6 +4196,37 @@ root - nice -20
 root soft memlock unlimited
 root hard memlock unlimited
 LIMITSGAMING
+
+	# Sysctl : parametres noyau gaming et reseau
+	cat > /etc/sysctl.d/99-sysctl.conf <<'SYSCTLGAMING'
+vm.swappiness = 25
+vm.vfs_cache_pressure = 50
+vm.dirty_background_bytes = 67108864
+vm.dirty_bytes = 268435456
+vm.dirty_writeback_centisecs = 1500
+vm.page-cluster = 0
+vm.compaction_proactiveness = 0
+vm.transparent_hugepage = madvise
+kernel.nmi_watchdog = 0
+kernel.unprivileged_userns_clone = 1
+kernel.kptr_restrict = 1
+kernel.randomize_va_space = 2
+net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq_codel
+net.core.netdev_max_backlog = 4096
+fs.file-max = 2097152
+vm.max_map_count = 16777216
+net.ipv4.ip_forward = 1
+SYSCTLGAMING
+	run_logged sysctl --system
+
+	# THP : persistent via tmpfiles.d (defrag=defer+madvise, enabled=madvise)
+	cat > /etc/tmpfiles.d/thp.conf <<'THPFILES'
+# Persistent THP defrag setting
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
+THPFILES
+	run_logged systemd-tmpfiles --create /etc/tmpfiles.d/thp.conf
 }
 
 write_user_customizations() {
@@ -4274,6 +4310,30 @@ install_repo_kernel_if_needed() {
 	detected_pkgbase=$(resolve_kernel_pkgbase)
 	KERNEL_PACKAGE="$detected_pkgbase"
 	KERNEL_HEADERS_PACKAGE="${detected_pkgbase}-headers"
+}
+
+install_proton_ge_if_needed() {
+	if ! selection_string_contains "$EXTRA_APP_PACKAGES" "steam"; then
+		return 0
+	fi
+
+	section "Installation de Proton-GE"
+	run_logged runuser -u "$USERNAME" -- bash -lc 'set -euo pipefail
+	rm -rf /tmp/proton-ge-custom
+	mkdir -p /tmp/proton-ge-custom
+	cd /tmp/proton-ge-custom
+	tarball_url=$(curl -fsSL https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep browser_download_url | cut -d" -f4 | grep ".tar.gz" | head -n1)
+	[[ -n "$tarball_url" ]]
+	tarball_name=$(basename "$tarball_url")
+	curl -fsSL "$tarball_url" -o "$tarball_name"
+	checksum_url=$(curl -fsSL https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep browser_download_url | cut -d" -f4 | grep ".sha512sum" | head -n1)
+	[[ -n "$checksum_url" ]]
+	checksum_name=$(basename "$checksum_url")
+	curl -fsSL "$checksum_url" -o "$checksum_name"
+	sha512sum -c "$checksum_name"
+	mkdir -p ~/.steam/steam/compatibilitytools.d
+	tar -xf "$tarball_name" -C ~/.steam/steam/compatibilitytools.d/
+	rm -rf /tmp/proton-ge-custom'
 }
 
 enable_services() {
@@ -4574,6 +4634,7 @@ main() {
 	install_yay_if_needed
 	install_gns3_server_if_needed
 	install_repo_kernel_if_needed
+	install_proton_ge_if_needed
 	configure_persistent_swapfile
 	configure_zram
 	configure_mkinitcpio
