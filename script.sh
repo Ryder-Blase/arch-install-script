@@ -2742,15 +2742,19 @@ configure_persistent_swapfile() {
 }
 
 configure_zram() {
+	local zram_size_mib
+
 	if [[ "$ENABLE_ZRAM" != "yes" ]]; then
 		return 0
 	fi
+
+	zram_size_mib=$(( ZRAM_SIZE_GIB * 1024 ))
 
 	section "zram"
 	run_logged install -d -m 0755 /etc/systemd
 	cat > /etc/systemd/zram-generator.conf <<ZRAMCONF
 [zram0]
-zram-size = ${ZRAM_SIZE_GIB}G
+zram-size = min(ram, ${zram_size_mib})
 compression-algorithm = zstd
 swap-priority = 100
 ZRAMCONF
@@ -4545,6 +4549,11 @@ cleanup_sensitive_files() {
 	rm -f /etc/sudoers.d/99-installer-nopasswd
 }
 
+cleanup_package_cache() {
+	section "Nettoyage du cache pacman"
+	run_logged pacman -Scc --noconfirm
+}
+
 main() {
 	if [[ ! -f "$CONFIG_FILE" ]]; then
 		die "Fichier de configuration introuvable dans le chroot."
@@ -4578,6 +4587,7 @@ main() {
 	append_user_to_existing_groups "${installer_groups[@]}"
 	write_user_customizations
 	write_session_helpers
+	cleanup_package_cache
 	cleanup_sensitive_files
 
 	section "Chroot termine"
