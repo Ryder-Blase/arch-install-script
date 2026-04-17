@@ -46,7 +46,6 @@ ENABLE_CUPS="no"
 ENABLE_SWAPFILE="no"
 SWAPFILE_SIZE_GIB="4"
 ENABLE_ZRAM="no"
-ZRAM_SIZE_GIB="4"
 INSTALL_PICOM="no"
 USER_SHELL_CHOICE="bash"
 INSTALL_OH_MY_ZSH="no"
@@ -421,9 +420,6 @@ configure_memory_features() {
 
 	zram_default=$([[ "$ENABLE_ZRAM" == "yes" ]] && printf 'y' || printf 'n')
 	set_yes_no_var ENABLE_ZRAM "Activer zram au demarrage ?" "$zram_default" || return "$?"
-	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
-		capture_value ZRAM_SIZE_GIB prompt_positive_integer "Taille de zram (GiB)" "$ZRAM_SIZE_GIB" || return "$?"
-	fi
 }
 
 prompt_password_twice() {
@@ -1226,7 +1222,6 @@ validate_stack_choices() {
 	fi
 
 	[[ "$SWAPFILE_SIZE_GIB" =~ ^[0-9]+$ ]] && (( SWAPFILE_SIZE_GIB > 0 )) || die "La taille du fichier swap doit etre un entier strictement positif."
-	[[ "$ZRAM_SIZE_GIB" =~ ^[0-9]+$ ]] && (( ZRAM_SIZE_GIB > 0 )) || die "La taille de zram doit etre un entier strictement positif."
 }
 
 auto_partition_disk() {
@@ -2188,7 +2183,7 @@ describe_storage_status() {
 		memory_parts+=("swapfile ${SWAPFILE_SIZE_GIB}G")
 	fi
 	if [[ "$ENABLE_ZRAM" == "yes" ]]; then
-		memory_parts+=("zram ${ZRAM_SIZE_GIB}G")
+		memory_parts+=("zram auto")
 	fi
 
 	if ((${#memory_parts[@]})); then
@@ -2237,7 +2232,7 @@ Racine         : ${ROOT_PART:-<non choisi>} / ${ROOT_FS:-n/a}
 Home           : ${HOME_PART:-<aucun>} / ${HOME_FS:-n/a}
 Swap           : ${SWAP_PART:-<aucune>}
 Swapfile       : $([[ "$ENABLE_SWAPFILE" == "yes" ]] && printf '%s GiB' "$SWAPFILE_SIZE_GIB" || printf 'Non')
-Zram           : $([[ "$ENABLE_ZRAM" == "yes" ]] && printf '%s GiB' "$ZRAM_SIZE_GIB" || printf 'Non')
+Zram           : $([[ "$ENABLE_ZRAM" == "yes" ]] && printf 'Actif (auto)' || printf 'Non')
 Chiffrement    : $([[ "$STORAGE_STACK" == "standard" ]] && printf 'Non' || printf '%s' "$LUKS_NAME")
 LVM            : $([[ "$STORAGE_STACK" == "luks-lvm" ]] && printf '%s [%s,%s,%s]' "$LVM_VG_NAME" "$LVM_ROOT_NAME" "$LVM_HOME_NAME" "$LVM_SWAP_NAME" || printf 'Non')
 btrfs          : subvolumes $(pretty_bool "$USE_BTRFS_SUBVOLUMES")
@@ -2344,7 +2339,7 @@ save_profile_interactive() {
 		CUSTOM_MESA_PACKAGE CUSTOM_MESA_LIB32_PACKAGE TARGET_DISK PARTITION_MODE EFI_PART \
 		ROOT_PART HOME_PART SWAP_PART FORMAT_EFI FORMAT_ROOT FORMAT_HOME ROOT_FS HOME_FS \
 		AUTO_CREATE_HOME AUTO_CREATE_SWAP AUTO_SWAP_SIZE_GIB AUTO_ROOT_SIZE_GIB \
-		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM ZRAM_SIZE_GIB
+		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM
 	chmod 600 "$profile_path"
 	info "Profil enregistre dans $profile_path"
 	warn "Les mots de passe ne sont pas sauvegardes dans les profils."
@@ -2510,7 +2505,7 @@ write_target_config() {
 		AUTO_CREATE_SWAP AUTO_SWAP_SIZE_GIB AUTO_ROOT_SIZE_GIB FINAL_ROOT_DEVICE \
 		FINAL_HOME_DEVICE FINAL_SWAP_DEVICE KERNEL_MODE KERNEL_PACKAGE \
 		KERNEL_HEADERS_PACKAGE MESA_MODE CUSTOM_MESA_PACKAGE CUSTOM_MESA_LIB32_PACKAGE \
-		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM ZRAM_SIZE_GIB ROOT_PASSWORD USER_PASSWORD
+		ENABLE_SWAPFILE SWAPFILE_SIZE_GIB ENABLE_ZRAM ROOT_PASSWORD USER_PASSWORD
 	declare -p OFFICIAL_PACKAGES CHAOTIC_PACKAGES AUR_PACKAGES SERVICES_TO_ENABLE >> "$ARCH_CONFIG_PATH"
 
 	chmod 600 "$ARCH_CONFIG_PATH"
@@ -2747,21 +2742,18 @@ configure_persistent_swapfile() {
 }
 
 configure_zram() {
-	local zram_size_mib
-
 	if [[ "$ENABLE_ZRAM" != "yes" ]]; then
 		return 0
 	fi
 
-	zram_size_mib=$(( ZRAM_SIZE_GIB * 1024 ))
-
 	section "zram"
 	run_logged install -d -m 0755 /etc/systemd
-	cat > /etc/systemd/zram-generator.conf <<ZRAMCONF
+	cat > /etc/systemd/zram-generator.conf <<'ZRAMCONF'
 [zram0]
-zram-size = min(${zram_size_mib})
 compression-algorithm = zstd
+zram-size = ram
 swap-priority = 100
+fs-type = swap
 ZRAMCONF
 }
 
