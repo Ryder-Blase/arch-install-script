@@ -2091,6 +2091,72 @@ count_selected_items() {
 	printf '%s' "${#items[@]}"
 }
 
+compact_inline_text() {
+	local value=${1:-}
+
+	value=$(printf '%s' "$value" | tr '\n' ' ' | xargs 2>/dev/null || true)
+	printf '%s' "$value"
+}
+
+truncate_display_text() {
+	local value max_length
+
+	value=$(compact_inline_text "${1:-}")
+	max_length=${2:-64}
+
+	if (( ${#value} > max_length )); then
+		printf '%s...' "${value:0:max_length-3}"
+	else
+		printf '%s' "$value"
+	fi
+}
+
+describe_live_pc_label() {
+	local vendor="" product="" label=""
+
+	[[ -r /sys/devices/virtual/dmi/id/sys_vendor ]] && vendor=$(</sys/devices/virtual/dmi/id/sys_vendor)
+	[[ -r /sys/devices/virtual/dmi/id/product_name ]] && product=$(</sys/devices/virtual/dmi/id/product_name)
+	label=$(printf '%s %s' "$vendor" "$product" | xargs 2>/dev/null || true)
+	[[ -z "$label" ]] && label="Live ISO"
+
+	truncate_display_text "$label" 72
+}
+
+describe_live_pc_specs() {
+	local cpu_label ram_label disk_label first_disk=""
+	local mem_total_kib=""
+	local disk_count=0
+	local disk=""
+
+	cpu_label=$(awk -F: '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null | xargs 2>/dev/null || true)
+	[[ -z "$cpu_label" ]] && cpu_label="CPU non detecte"
+
+	mem_total_kib=$(awk '/MemTotal/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
+	if [[ -n "$mem_total_kib" ]]; then
+		ram_label=$(awk -v kib="$mem_total_kib" 'BEGIN { printf "%.1f GiB", kib / 1048576 }')
+	else
+		ram_label="RAM n/a"
+	fi
+
+	while IFS= read -r disk; do
+		((disk_count += 1))
+		if (( disk_count == 1 )); then
+			first_disk=$(lsblk -dn -o SIZE,MODEL "$disk" 2>/dev/null | head -n1 | xargs 2>/dev/null || true)
+			[[ -z "$first_disk" ]] && first_disk=$(lsblk -dn -o SIZE "$disk" 2>/dev/null | head -n1 | xargs 2>/dev/null || true)
+		fi
+	done < <(lsblk -dn -o PATH,TYPE 2>/dev/null | awk '$2 == "disk" {print $1}' || true)
+
+	if (( disk_count == 0 )); then
+		disk_label="DISK n/a"
+	elif (( disk_count == 1 )); then
+		disk_label="DISK ${first_disk:-non detecte}"
+	else
+		disk_label="DISK ${first_disk:-non detecte} (+$((disk_count - 1)))"
+	fi
+
+	printf 'CPU %s / RAM %s / %s' "$(truncate_display_text "$cpu_label" 28)" "$ram_label" "$(truncate_display_text "$disk_label" 28)"
+}
+
 describe_identity_status() {
 	printf '%s / %s / secrets %s' "$HOSTNAME" "$USERNAME" "$(pair_ready_label "$ROOT_PASSWORD" "$USER_PASSWORD")"
 }
@@ -2181,8 +2247,14 @@ EOF
 }
 
 render_dashboard_overview() {
+	local pc_label hw_label
+
+	pc_label=$(describe_live_pc_label)
+	hw_label=$(describe_live_pc_specs)
+
 	cat <<EOF
-Configuration Arch
+PC   : $pc_label
+HW   : $hw_label
 
 Cancel = retour
 Ctrl+C = quitter
@@ -2319,7 +2391,7 @@ main_menu_loop() {
 	while true; do
 		if use_tui; then
 			menu_text=$(render_dashboard_overview)
-			action=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Configuration Arch" --default-item "Identite" --menu "$menu_text" 24 100 14 \
+			action=$(run_whiptail_capture --backtitle "$SCRIPT_NAME" --title "Configuration Arch" --default-item "Identite" --menu "$menu_text" 24 100 11 \
 				"Identite" "$(describe_identity_status)" \
 				"Systeme" "$(describe_system_status)" \
 				"Utilisateur" "$(describe_user_status)" \
@@ -2333,6 +2405,8 @@ main_menu_loop() {
 				"Quitter" "Fermer l'installateur") || action="Quitter"
 		else
 			section "Menu principal"
+			printf 'PC   : %s\n' "$(describe_live_pc_label)"
+			printf 'HW   : %s\n' "$(describe_live_pc_specs)"
 			printf 'Etat: identite=%s, systeme=%s, stockage=%s\n' "$(pair_ready_label "$ROOT_PASSWORD" "$USER_PASSWORD")" "$KERNEL_PACKAGE" "$(ready_label "$ROOT_PART")"
 			menu_options=(
 				"Identite|$(describe_identity_status)"
