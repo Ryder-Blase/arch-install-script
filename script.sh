@@ -1853,7 +1853,8 @@ configure_user_extras() {
 		"eza|eza" \
 		"unzip|unzip" \
 		"zip|zip" \
-		"reflector|reflector" || return "$?"
+		"reflector|reflector" \
+		"docker-compose|docker-compose" || return "$?"
 
 	capture_value EXTRA_APP_PACKAGES choose_multi_option "${T[apps_label]}" "$EXTRA_APP_PACKAGES" \
 		"chromium|Chromium" \
@@ -1872,7 +1873,8 @@ configure_user_extras() {
 		"lutris|Lutris" \
 		"gamemode|Gamemode" \
 		"wine|Wine" \
-		"mangohud|MangoHud" || return "$?"
+		"mangohud|MangoHud" \
+		"visual-studio-code-insiders-bin|VS Code Insiders (AUR)" || return "$?"
 
 	set_yes_no_var INSTALL_VIRT_SUITE "${T[install_virt]}" "n" || return "$?"
 	set_yes_no_var INSTALL_GNS3 "${T[install_gns3]}" "n" || return "$?"
@@ -2553,7 +2555,17 @@ build_package_lists() {
 	local -a extra_app_packages=()
 	read -r -a extra_app_packages <<< "$EXTRA_APP_PACKAGES"
 	if ((${#extra_app_packages[@]})); then
-		append_unique OFFICIAL_PACKAGES "${extra_app_packages[@]}"
+		local _app
+		for _app in "${extra_app_packages[@]}"; do
+			case "$_app" in
+				visual-studio-code-insiders-bin)
+					append_unique AUR_PACKAGES "$_app"
+					;;
+				*)
+					append_unique OFFICIAL_PACKAGES "$_app"
+					;;
+			esac
+		done
 		if [[ "$ENABLE_MULTILIB" == "yes" ]]; then
 			contains_word "gamemode" "${extra_app_packages[@]}" && append_unique OFFICIAL_PACKAGES lib32-gamemode
 			contains_word "wine" "${extra_app_packages[@]}" && append_unique OFFICIAL_PACKAGES lib32-gnutls lib32-libpulse
