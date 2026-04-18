@@ -46,6 +46,7 @@ ENABLE_AVAHI="yes"
 ENABLE_BLUETOOTH="yes"
 ENABLE_OPENSSH="no"
 ENABLE_CUPS="no"
+DISABLE_NM_WAIT_ONLINE="yes"
 ENABLE_SWAPFILE="no"
 SWAPFILE_SIZE_GIB="4"
 ENABLE_ZRAM="no"
@@ -58,6 +59,9 @@ EXTRA_APP_PACKAGES=""
 INSTALL_VIRT_SUITE="no"
 INSTALL_GNS3="no"
 GAMING_TWEAKS="no"
+GNOME_DEBLOAT="no"
+GNOME_DEBLOAT_PACKAGES="gnome-software gnome-weather epiphany gnome-maps gnome-music gnome-photos gnome-contacts gnome-calendar gnome-clocks gnome-tour gnome-user-docs yelp totem simple-scan malcontent"
+GNOME_NAUTILUS_TWEAKS="no"
 USE_OS_PROBER="yes"
 PREPARE_CHAOTIC="no"
 BOOTLOADER="grub"
@@ -208,6 +212,10 @@ load_lang_fr() {
 		[enable_bt]="Activer Bluetooth ?"
 		[enable_ssh]="Activer OpenSSH ?"
 		[enable_cups]="Activer CUPS (impression) ?"
+		[disable_nm_wait]="Desactiver NetworkManager-wait-online (boot plus rapide) ?"
+		[gnome_debloat]="Supprimer les apps GNOME inutiles (debloat) ?"
+		[gnome_debloat_select]="GNOME DEBLOAT - Selectionnez les paquets a supprimer"
+		[gnome_nautilus_tweaks]="Appliquer les tweaks Nautilus (cache miniatures, pas de recherche recursive, tracker desactive) ?"
 
 		# --- User extras ---
 		[install_picom]="Installer picom (compositeur X11) ?"
@@ -516,6 +524,10 @@ load_lang_en() {
 		[enable_bt]="Enable Bluetooth?"
 		[enable_ssh]="Enable OpenSSH?"
 		[enable_cups]="Enable CUPS (printing)?"
+		[disable_nm_wait]="Disable NetworkManager-wait-online (faster boot)?"
+		[gnome_debloat]="Remove unnecessary GNOME apps (debloat)?"
+		[gnome_debloat_select]="GNOME DEBLOAT - Select packages to remove"
+		[gnome_nautilus_tweaks]="Apply Nautilus tweaks (thumbnail cache, no recursive search, tracker disabled)?"
 
 		# --- User extras ---
 		[install_picom]="Install picom (X11 compositor)?"
@@ -1767,6 +1779,38 @@ collect_system_stack() {
 	set_yes_no_var ENABLE_OPENSSH "${T[enable_ssh]}" "n" || return "$?"
 	set_yes_no_var ENABLE_CUPS "${T[enable_cups]}" "$([[ "$ENABLE_CUPS" == "yes" ]] && printf 'y' || printf 'n')" || return "$?"
 
+	if [[ "$NETWORK_STACK" == "networkmanager" ]]; then
+		set_yes_no_var DISABLE_NM_WAIT_ONLINE "${T[disable_nm_wait]}" "y" || return "$?"
+	else
+		DISABLE_NM_WAIT_ONLINE="no"
+	fi
+
+	if [[ "$DESKTOP_CHOICE" == "gnome" ]]; then
+		set_yes_no_var GNOME_NAUTILUS_TWEAKS "${T[gnome_nautilus_tweaks]}" "y" || return "$?"
+		set_yes_no_var GNOME_DEBLOAT "${T[gnome_debloat]}" "y" || return "$?"
+		if [[ "$GNOME_DEBLOAT" == "yes" ]]; then
+			capture_value GNOME_DEBLOAT_PACKAGES choose_multi_option "${T[gnome_debloat_select]}" "$GNOME_DEBLOAT_PACKAGES" \
+				"gnome-software|Store graphique (gnome-software)" \
+				"gnome-weather|Meteo (gnome-weather)" \
+				"epiphany|Navigateur GNOME (epiphany)" \
+				"gnome-maps|Cartes (gnome-maps)" \
+				"gnome-music|Lecteur musique (gnome-music)" \
+				"gnome-photos|Photos (gnome-photos)" \
+				"gnome-contacts|Contacts (gnome-contacts)" \
+				"gnome-calendar|Calendrier (gnome-calendar)" \
+				"gnome-clocks|Horloge (gnome-clocks)" \
+				"gnome-tour|Visite guidee (gnome-tour)" \
+				"gnome-user-docs|Documentation (gnome-user-docs)" \
+				"yelp|Aide GNOME (yelp)" \
+				"totem|Lecteur video (totem)" \
+				"simple-scan|Scanner (simple-scan)" \
+				"malcontent|Controle parental (malcontent)" || return "$?"
+		fi
+	else
+		GNOME_DEBLOAT="no"
+		GNOME_NAUTILUS_TWEAKS="no"
+	fi
+
 	configure_user_extras || return "$?"
 }
 
@@ -2986,7 +3030,7 @@ ${T[sum_system]}
   ${T[sum_audio]}        : $(pretty_label audio "$AUDIO_STACK")
   ${T[sum_shell]}        : $(pretty_label shell "$USER_SHELL_CHOICE")
   ${T[sum_cli]}          : ${EXTRA_UTILITY_PACKAGES:-${T[sum_none]}}
-  ${T[sum_options]}      : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bt $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH") / cups $(pretty_bool "$ENABLE_CUPS")
+  ${T[sum_options]}      : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bt $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH") / cups $(pretty_bool "$ENABLE_CUPS") / nm-fast-boot $(pretty_bool "$DISABLE_NM_WAIT_ONLINE") / nautilus-tweaks $(pretty_bool "$GNOME_NAUTILUS_TWEAKS") / gnome-debloat $(pretty_bool "$GNOME_DEBLOAT")
   ${T[sum_virt]}         : qemu $(pretty_bool "$INSTALL_VIRT_SUITE") / gns3 $(pretty_bool "$INSTALL_GNS3")
   ${T[sum_extras]}       : os-prober $(pretty_bool "$USE_OS_PROBER") / chaotic $(pretty_bool "$PREPARE_CHAOTIC") / tkg $([[ "$KERNEL_MODE" == "repo" ]] && printf 'ON' || printf 'OFF')
 
@@ -3099,8 +3143,8 @@ save_profile_interactive() {
 	write_scalar_vars "$profile_path" \
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP XKB_LAYOUT CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
-		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS USE_OS_PROBER \
+		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS DISABLE_NM_WAIT_ONLINE GNOME_DEBLOAT USER_SHELL_CHOICE \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS USE_OS_PROBER \
 		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -3263,8 +3307,8 @@ write_target_config() {
 	write_scalar_vars "$ARCH_CONFIG_PATH" \
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP XKB_LAYOUT CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
-		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS \
+		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS DISABLE_NM_WAIT_ONLINE USER_SHELL_CHOICE \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS \
 		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
@@ -3477,6 +3521,8 @@ build_kernel_cmdline() {
 	if [[ "$ROOT_FS" == "btrfs" && "$USE_BTRFS_SUBVOLUMES" == "yes" ]]; then
 		cmdline="$cmdline rootflags=subvol=@"
 	fi
+
+	cmdline="$cmdline 8250.nr_uarts=0"
 
 	printf '%s rw\n' "$cmdline"
 }
@@ -5049,6 +5095,58 @@ EOFCHROMIUM
 	info "Chromium Wayland flags installes."
 }
 
+apply_gnome_tweaks() {
+	if [[ "$DESKTOP_CHOICE" != "gnome" ]]; then
+		return 0
+	fi
+
+	local user_home="/home/$USERNAME"
+
+	# --- Nautilus tweaks (si active) ---
+	if [[ "$GNOME_NAUTILUS_TWEAKS" == "yes" ]]; then
+		local dconf_dir="$user_home/.config/dconf"
+		install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$dconf_dir"
+
+		run_logged runuser -u "$USERNAME" -- env HOME="$user_home" DBUS_SESSION_BUS_ADDRESS=disabled \
+			dconf load / <<'EOFDCONF'
+[org/gnome/desktop/thumbnail-cache]
+maximum-age=1
+maximum-size=10
+
+[org/gnome/nautilus/preferences]
+recursive-search='never'
+EOFDCONF
+		info "Tweaks Nautilus appliques (cache miniatures + recherche non-recursive)."
+
+		# Desactiver tracker-miner (indexation fichiers) pour l'utilisateur
+		local user_systemd="$user_home/.config/systemd/user"
+		install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$user_systemd"
+		ln -sfn /dev/null "$user_systemd/tracker-miner-fs-3.service"
+		ln -sfn /dev/null "$user_systemd/tracker-store.service"
+		chown -h "$USERNAME:$USERNAME" "$user_systemd/tracker-miner-fs-3.service" "$user_systemd/tracker-store.service"
+		info "Tracker miner/store masques pour $USERNAME."
+	fi
+
+	# --- Debloat : supprimer les paquets GNOME selectionnes ---
+	if [[ "$GNOME_DEBLOAT" == "yes" && -n "$GNOME_DEBLOAT_PACKAGES" ]]; then
+		local -a selected_pkgs=()
+		read -r -a selected_pkgs <<< "$GNOME_DEBLOAT_PACKAGES"
+		local -a to_remove=()
+		local pkg
+		for pkg in "${selected_pkgs[@]}"; do
+			if pacman -Q "$pkg" >/dev/null 2>&1; then
+				to_remove+=("$pkg")
+			fi
+		done
+		if ((${#to_remove[@]})); then
+			run_pty pacman -Rns --noconfirm "${to_remove[@]}" || true
+			info "GNOME debloat : ${#to_remove[@]} paquets supprimes."
+		else
+			info "GNOME debloat : aucun paquet a supprimer."
+		fi
+	fi
+}
+
 write_user_customizations() {
 	section "PERSONNALISATION"
 	write_fastfetch_config
@@ -5061,6 +5159,7 @@ write_user_customizations() {
 	write_i3_dotfiles
 	write_chromium_wayland_flags
 	write_gaming_tweaks
+	apply_gnome_tweaks
 }
 
 sync_and_install_packages() {
@@ -5173,6 +5272,10 @@ enable_services() {
 
 	if pacman -Q dbus-broker >/dev/null 2>&1; then
 		run_logged systemctl enable dbus-broker.service || true
+	fi
+
+	if [[ "$DISABLE_NM_WAIT_ONLINE" == "yes" ]]; then
+		run_logged systemctl disable NetworkManager-wait-online.service || true
 	fi
 }
 
