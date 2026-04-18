@@ -1854,7 +1854,9 @@ configure_user_extras() {
 		"unzip|unzip" \
 		"zip|zip" \
 		"reflector|reflector" \
-		"docker-compose|docker-compose" || return "$?"
+		"docker-compose|docker-compose" \
+		"htop|htop" \
+		"ncdu|ncdu" || return "$?"
 
 	capture_value EXTRA_APP_PACKAGES choose_multi_option "${T[apps_label]}" "$EXTRA_APP_PACKAGES" \
 		"chromium|Chromium" \
