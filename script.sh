@@ -5118,18 +5118,27 @@ apply_gnome_tweaks() {
 
 	# --- Nautilus tweaks (si active) ---
 	if [[ "$GNOME_NAUTILUS_TWEAKS" == "yes" ]]; then
+		# Ecrire les parametres via dconf keyfile backend (pas besoin de D-Bus)
 		local dconf_dir="$user_home/.config/dconf"
+		local dconf_keydir="$dconf_dir/user.d"
 		install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$dconf_dir"
+		install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$dconf_keydir"
 
-		run_logged runuser -u "$USERNAME" -- env HOME="$user_home" DBUS_SESSION_BUS_ADDRESS=disabled \
-			dconf load / <<'EOFDCONF'
+		cat > "$dconf_keydir/00-nautilus-tweaks" <<'EOFDCONF'
 [org/gnome/desktop/thumbnail-cache]
-maximum-age=1
-maximum-size=10
+maximum-age=uint32 1
+maximum-size=uint32 10
 
 [org/gnome/nautilus/preferences]
 recursive-search='never'
 EOFDCONF
+		# Compiler le repertoire keyfiles en base dconf binaire
+		if command -v dconf >/dev/null 2>&1; then
+			runuser -u "$USERNAME" -- env HOME="$user_home" DBUS_SESSION_BUS_ADDRESS=disabled \
+				dconf compile "$dconf_dir/user" "$dconf_keydir" 2>/dev/null || true
+		fi
+		rm -rf "$dconf_keydir"
+		chown -R "$USERNAME:$USERNAME" "$dconf_dir"
 		info "Tweaks Nautilus appliques (cache miniatures + recherche non-recursive)."
 
 		# Desactiver tracker-miner (indexation fichiers) pour l'utilisateur
