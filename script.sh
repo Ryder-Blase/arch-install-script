@@ -3181,6 +3181,9 @@ load_profile_interactive() {
 
 	# shellcheck disable=SC1090
 	source "$profile_path"
+	ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+	USER_PASSWORD="${USER_PASSWORD:-}"
+	LUKS_PASSWORD="${LUKS_PASSWORD:-}"
 	FINAL_ROOT_DEVICE=""
 	FINAL_HOME_DEVICE=""
 	FINAL_SWAP_DEVICE=""
@@ -5255,36 +5258,6 @@ install_repo_kernel_if_needed() {
 	KERNEL_HEADERS_PACKAGE="${detected_pkgbase}-headers"
 }
 
-install_proton_ge_if_needed() {
-	if ! selection_string_contains "$EXTRA_APP_PACKAGES" "steam"; then
-		return 0
-	fi
-
-	section "PROTON-GE"
-	local script_file="/tmp/install-proton-ge.sh"
-	cat > "$script_file" <<'EOFPROTON'
-set -euo pipefail
-rm -rf /tmp/proton-ge-custom
-mkdir -p /tmp/proton-ge-custom
-cd /tmp/proton-ge-custom
-tarball_url=$(curl -fsSL https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep browser_download_url | cut -d'"' -f4 | grep ".tar.gz" | head -n1)
-[[ -n "$tarball_url" ]]
-tarball_name=$(basename "$tarball_url")
-curl -fsSL "$tarball_url" -o "$tarball_name"
-checksum_url=$(curl -fsSL https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest | grep browser_download_url | cut -d'"' -f4 | grep ".sha512sum" | head -n1)
-[[ -n "$checksum_url" ]]
-checksum_name=$(basename "$checksum_url")
-curl -fsSL "$checksum_url" -o "$checksum_name"
-sha512sum -c "$checksum_name"
-mkdir -p ~/.steam/steam/compatibilitytools.d
-tar -xf "$tarball_name" -C ~/.steam/steam/compatibilitytools.d/
-rm -rf /tmp/proton-ge-custom
-EOFPROTON
-	chmod +x "$script_file"
-	run_logged runuser -u "$USERNAME" -- bash -l "$script_file"
-	rm -f "$script_file"
-}
-
 enable_services() {
 	local service
 
@@ -5590,7 +5563,6 @@ main() {
 	install_yay_if_needed
 	install_gns3_server_if_needed
 	install_repo_kernel_if_needed
-	install_proton_ge_if_needed
 	configure_persistent_swapfile
 	configure_zram
 	configure_mkinitcpio
