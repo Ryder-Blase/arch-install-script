@@ -59,6 +59,8 @@ EXTRA_APP_PACKAGES=""
 INSTALL_VIRT_SUITE="no"
 INSTALL_GNS3="no"
 GAMING_TWEAKS="no"
+DISABLE_CPU_MITIGATIONS="no"
+INSTALL_PLASMA_FG_BOOSTER="no"
 GNOME_DEBLOAT="no"
 GNOME_DEBLOAT_PACKAGES="gnome-software gnome-weather epiphany gnome-maps gnome-music gnome-photos gnome-contacts gnome-calendar gnome-clocks gnome-tour gnome-user-docs yelp totem simple-scan malcontent"
 GNOME_NAUTILUS_TWEAKS="no"
@@ -228,6 +230,8 @@ load_lang_fr() {
 		[install_virt]="Installer QEMU + libvirt + virt-manager ?"
 		[install_gns3]="Installer GNS3 ?"
 		[gaming_tweaks]="Appliquer les tweaks gaming ?"
+		[disable_cpu_mitigations]="Desactiver les mitigations CPU (mitigations=off) ? [+5-10% perf, risque securite]"
+		[install_plasma_fg_booster]="Installer plasma-foreground-booster (KDE) ? [priorise l'app au premier plan]"
 
 		# --- TKG ---
 		[tkg_warn_select]="Selectionner d'abord 'linux-tkg (compilation Git)' dans SYSTEME > NOYAU."
@@ -540,6 +544,8 @@ load_lang_en() {
 		[install_virt]="Install QEMU + libvirt + virt-manager?"
 		[install_gns3]="Install GNS3?"
 		[gaming_tweaks]="Apply gaming tweaks?"
+		[disable_cpu_mitigations]="Disable CPU security mitigations (mitigations=off)? [+5-10% perf, security risk]"
+		[install_plasma_fg_booster]="Install plasma-foreground-booster (KDE)? [prioritizes foreground app]"
 
 		# --- TKG ---
 		[tkg_warn_select]="Select 'linux-tkg (Git build)' in SYSTEM > KERNEL first."
@@ -1891,6 +1897,14 @@ configure_user_extras() {
 		fi
 	done
 	set_yes_no_var GAMING_TWEAKS "${T[gaming_tweaks]}" "$gaming_default" || return "$?"
+
+	set_yes_no_var DISABLE_CPU_MITIGATIONS "${T[disable_cpu_mitigations]}" "n" || return "$?"
+
+	if [[ "$DESKTOP_CHOICE" == "kde" ]]; then
+		set_yes_no_var INSTALL_PLASMA_FG_BOOSTER "${T[install_plasma_fg_booster]}" "n" || return "$?"
+	else
+		INSTALL_PLASMA_FG_BOOSTER="no"
+	fi
 }
 
 collect_linux_tkg_options() {
@@ -2682,6 +2696,7 @@ build_package_lists() {
 			;;
 		kde)
 			append_unique OFFICIAL_PACKAGES plasma-meta konsole dolphin kate ark spectacle
+			[[ "$INSTALL_PLASMA_FG_BOOSTER" == "yes" ]] && append_unique AUR_PACKAGES plasma-foreground-booster-dmemcg
 			;;
 		xfce)
 			append_unique OFFICIAL_PACKAGES xfce4 xfce4-goodies
@@ -3044,7 +3059,7 @@ ${T[sum_system]}
   ${T[sum_audio]}        : $(pretty_label audio "$AUDIO_STACK")
   ${T[sum_shell]}        : $(pretty_label shell "$USER_SHELL_CHOICE")
   ${T[sum_cli]}          : ${EXTRA_UTILITY_PACKAGES:-${T[sum_none]}}
-  ${T[sum_options]}      : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bt $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH") / cups $(pretty_bool "$ENABLE_CUPS") / nm-fast-boot $(pretty_bool "$DISABLE_NM_WAIT_ONLINE") / nautilus-tweaks $(pretty_bool "$GNOME_NAUTILUS_TWEAKS") / gnome-debloat $(pretty_bool "$GNOME_DEBLOAT")
+  ${T[sum_options]}      : multilib $(pretty_bool "$ENABLE_MULTILIB") / avahi $(pretty_bool "$ENABLE_AVAHI") / bt $(pretty_bool "$ENABLE_BLUETOOTH") / ssh $(pretty_bool "$ENABLE_OPENSSH") / cups $(pretty_bool "$ENABLE_CUPS") / nm-fast-boot $(pretty_bool "$DISABLE_NM_WAIT_ONLINE") / nautilus-tweaks $(pretty_bool "$GNOME_NAUTILUS_TWEAKS") / gnome-debloat $(pretty_bool "$GNOME_DEBLOAT") / no-mitigations $(pretty_bool "$DISABLE_CPU_MITIGATIONS")
   ${T[sum_virt]}         : qemu $(pretty_bool "$INSTALL_VIRT_SUITE") / gns3 $(pretty_bool "$INSTALL_GNS3")
   ${T[sum_extras]}       : os-prober $(pretty_bool "$USE_OS_PROBER") / chaotic $(pretty_bool "$PREPARE_CHAOTIC") / tkg $([[ "$KERNEL_MODE" == "repo" ]] && printf 'ON' || printf 'OFF')
 
@@ -3158,7 +3173,7 @@ save_profile_interactive() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP XKB_LAYOUT CPU_VENDOR GPU_VENDOR \
 		NETWORK_STACK AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER \
 		ENABLE_MULTILIB ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS DISABLE_NM_WAIT_ONLINE GNOME_DEBLOAT USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS USE_OS_PROBER \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS DISABLE_CPU_MITIGATIONS INSTALL_PLASMA_FG_BOOSTER GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS USE_OS_PROBER \
 		PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK \
 		USE_BTRFS_SUBVOLUMES FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
 		LVM_HOME_NAME LVM_SWAP_NAME LVM_CREATE_HOME LVM_CREATE_SWAP ROOT_LV_SIZE_GIB \
@@ -3325,7 +3340,7 @@ write_target_config() {
 		HOSTNAME USERNAME TIMEZONE LOCALE KEYMAP XKB_LAYOUT CPU_VENDOR GPU_VENDOR NETWORK_STACK \
 		AUDIO_STACK DESKTOP_CHOICE SESSION_STACK DISPLAY_MANAGER ENABLE_MULTILIB \
 		ENABLE_AVAHI ENABLE_BLUETOOTH ENABLE_OPENSSH ENABLE_CUPS DISABLE_NM_WAIT_ONLINE USER_SHELL_CHOICE \
-		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS \
+		INSTALL_OH_MY_ZSH INSTALL_POWERLEVEL10K EXTRA_UTILITY_PACKAGES EXTRA_APP_PACKAGES INSTALL_VIRT_SUITE INSTALL_GNS3 GAMING_TWEAKS DISABLE_CPU_MITIGATIONS INSTALL_PLASMA_FG_BOOSTER GNOME_DEBLOAT GNOME_DEBLOAT_PACKAGES GNOME_NAUTILUS_TWEAKS \
 		USE_OS_PROBER PREPARE_CHAOTIC AUTOLOGIN AUTOSTART_WM INSTALL_PICOM \
 		BOOTLOADER EFI_MOUNT_TARGET KERNEL_REPO_URL STORAGE_STACK USE_BTRFS_SUBVOLUMES \
 		FORMAT_ROOT_CONTAINER LUKS_NAME LVM_VG_NAME LVM_ROOT_NAME \
@@ -3540,6 +3555,10 @@ build_kernel_cmdline() {
 	fi
 
 	cmdline="$cmdline 8250.nr_uarts=0"
+
+	if [[ "$DISABLE_CPU_MITIGATIONS" == "yes" ]]; then
+		cmdline="$cmdline mitigations=off"
+	fi
 
 	printf '%s rw\n' "$cmdline"
 }
@@ -5173,6 +5192,26 @@ EOFDCONF
 	fi
 }
 
+write_plasma_fg_booster_autostart() {
+	[[ "$INSTALL_PLASMA_FG_BOOSTER" == "yes" ]] || return 0
+	[[ "$DESKTOP_CHOICE" == "kde" ]] || return 0
+
+	local user_home="/home/$USERNAME"
+	local autostart_dir="$user_home/.config/autostart"
+
+	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$autostart_dir"
+	cat > "$autostart_dir/foreground_booster.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Foreground Booster
+Exec=/usr/bin/foreground_booster
+OnlyShowIn=KDE;
+X-KDE-Autostart-after=panel
+EOF
+	chown "$USERNAME:$USERNAME" "$autostart_dir/foreground_booster.desktop"
+	info "Foreground Booster autostart installe pour $USERNAME."
+}
+
 write_user_customizations() {
 	section "PERSONNALISATION"
 	write_fastfetch_config
@@ -5186,6 +5225,7 @@ write_user_customizations() {
 	write_chromium_wayland_flags
 	write_gaming_tweaks
 	apply_gnome_tweaks
+	write_plasma_fg_booster_autostart
 }
 
 sync_and_install_packages() {
