@@ -1882,6 +1882,15 @@ configure_user_extras() {
 		"gamemode|Gamemode" \
 		"wine|Wine" \
 		"mangohud|MangoHud" \
+		"protonup-qt|ProtonUp-Qt" \
+		"nmap|nmap" \
+		"aircrack-ng|Aircrack-ng" \
+		"metasploit|Metasploit" \
+		"netdiscover|netdiscover (AUR)" \
+		"brave-bin|Brave (AUR)" \
+		"zen-browser-bin|Zen Browser (AUR)" \
+		"proton-vpn-gtk-app|Proton VPN (AUR)" \
+		"visual-studio-code-bin|VS Code stable (AUR)" \
 		"visual-studio-code-insiders-bin|VS Code Insiders (AUR)" || return "$?"
 
 	set_yes_no_var INSTALL_VIRT_SUITE "${T[install_virt]}" "n" || return "$?"
@@ -2574,7 +2583,12 @@ build_package_lists() {
 		local _app
 		for _app in "${extra_app_packages[@]}"; do
 			case "$_app" in
-				visual-studio-code-insiders-bin)
+				visual-studio-code-insiders-bin|\
+				visual-studio-code-bin|\
+				zen-browser-bin|\
+				brave-bin|\
+				netdiscover|\
+				proton-vpn-gtk-app)
 					append_unique AUR_PACKAGES "$_app"
 					;;
 				*)
