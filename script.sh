@@ -2297,7 +2297,7 @@ create_btrfs_subvolume_layout() {
 	local create_home_subvol=$2
 	local mount_opts="noatime,compress=zstd:1"
 
-	run_logged mount "$root_source" "$TARGET_MOUNT"
+	run_logged mount -t btrfs "$root_source" "$TARGET_MOUNT"
 	if [[ "$FORMAT_ROOT" == "yes" ]]; then
 		btrfs subvolume show "$TARGET_MOUNT/@" >/dev/null 2>&1 || run_logged btrfs subvolume create "$TARGET_MOUNT/@"
 		if [[ "$create_home_subvol" == "yes" ]]; then
@@ -2390,14 +2390,14 @@ prepare_target_filesystems() {
 		fi
 		create_btrfs_subvolume_layout "$root_source" "$create_home_subvol"
 	else
-		run_logged mount "$root_source" "$TARGET_MOUNT"
+		run_logged mount -t "$ROOT_FS" "$root_source" "$TARGET_MOUNT"
 	fi
 	run_logged mkdir -p "$TARGET_MOUNT$EFI_MOUNT_TARGET"
-	run_logged mount "$EFI_PART" "$TARGET_MOUNT$EFI_MOUNT_TARGET"
+	run_logged mount -t vfat "$EFI_PART" "$TARGET_MOUNT$EFI_MOUNT_TARGET"
 
 	if [[ -n "$home_source" ]]; then
 		run_logged mkdir -p "$TARGET_MOUNT/home"
-		run_logged mount "$home_source" "$TARGET_MOUNT/home"
+		run_logged mount -t "$HOME_FS" "$home_source" "$TARGET_MOUNT/home"
 	fi
 
 	if [[ -n "$swap_source" ]]; then
