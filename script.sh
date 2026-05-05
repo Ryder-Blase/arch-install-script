@@ -5214,14 +5214,14 @@ write_plasma_fg_booster_autostart() {
 	local autostart_dir="$user_home/.config/autostart"
 
 	install -d -m 0755 -o "$USERNAME" -g "$USERNAME" "$autostart_dir"
-	cat > "$autostart_dir/foreground_booster.desktop" <<'EOF'
+	cat > "$autostart_dir/foreground_booster.desktop" <<'DESKTOP_EOF'
 [Desktop Entry]
 Type=Application
 Name=Foreground Booster
 Exec=/usr/bin/foreground_booster
 OnlyShowIn=KDE;
 X-KDE-Autostart-after=panel
-EOF
+DESKTOP_EOF
 	chown "$USERNAME:$USERNAME" "$autostart_dir/foreground_booster.desktop"
 	info "Foreground Booster autostart installe pour $USERNAME."
 }
